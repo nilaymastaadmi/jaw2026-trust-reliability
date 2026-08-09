@@ -1,0 +1,12 @@
+# The dataset is a separate public repo, cloned in place. Not ours to commit.
+#   git clone https://github.com/satvikGIKA/BITS-Hackathon-Dataset.git dataset
+dataset/
+
+# Generated artefacts — all reproducible from src/ + dataset/
+work/
+
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store

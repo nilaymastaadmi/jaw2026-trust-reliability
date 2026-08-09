@@ -1,0 +1,154 @@
+# JAW 2026 Hackathon — HANDOFF
+
+**Status as of 9 Aug: Phases 1 and 2 complete. 25/25 (100%) on the samples,
+end to end from raw question text, scored by the organizers' own `evaluate.py`.**
+
+## Deadlines
+
+| When | What |
+|---|---|
+| **10 Aug, 3:00 PM** | Validation set drops |
+| **13 Aug, 12:00 PM IST** | Final submission |
+| 15 Aug | Winners present, 20 min + slides |
+
+Scoring is the repo's `evaluate.py` bands (1.0 / 0.7 / 0.3 / 0), **not** the
+website's linear formula. The cliff at 0.5% relative error is the design
+constraint: approximately right is worth almost nothing.
+
+## When validation drops — the only command that matters
+
+```bash
+python src/answer.py --questions <validation.json> --out work/submission.jsonl --per-question
+```
+
+Submit within the first hour even if imperfect. The leaderboard is the only
+signal about the hidden set. Then triage by shape from the per-question output.
+
+## What exists
+
+```
+dataset/            cloned, checksum-verified, never modified
+src/
+  normalize.py      money / dates / client / work-name / word-numbers
+  corpus.py         PyMuPDF text cache (work/text_cache/, 678 files)
+  parsers.py        CCC, CC, REF, PCERT, CV — all 7 layouts
+  parse_portfolio.py DOC-PPP-001 → role (Prime / JV Partner)
+  build_db.py       → work/db.json
+  router.py         question → {shape, params}; deterministic + optional LLM
+  executor.py       the 13 shapes; ALL arithmetic lives here
+  answer.py         questions → submission.jsonl, with the fallback ladder
+  reconcile.py      teammate diff harness (--selftest proves it works)
+  test_executor.py  executor against the 25 golds
+  test_components.py invariants, intermediates, the date trap
+work/               db.json, text_cache/, submission.jsonl, answer_log.json
+```
+
+Rebuild from scratch: `python src/build_db.py && python src/answer.py`
+
+## Verification (all currently pass)
+
+```bash
+python src/test_components.py      # invariants + published intermediates
+python src/test_executor.py        # 25/25 executor
+python src/test_router_stress.py   # 37/37 on unseen paraphrases
+python src/answer.py --per-question # 25/25 end to end
+cd dataset && python evaluate.py --submission ../work/submission.jsonl \
+    --questions sample_questions.json
+```
+
+Invariants: 155 works · 28 clients · 132 with a reference letter · 23 without ·
+total ₹5,530.40 Cr (README says ~5,530) · 48 credentials (39 PMP + 9 Six Sigma).
+
+**`test_router_stress.py` is the one that matters for the hidden set.** The 25
+samples only prove one phrasing per shape; the hidden set is "larger and harder"
+and "not templated". The stress file holds 37 deliberately-unseen paraphrases —
+chatty, synonym-heavy — and asserts shape + parameters + that the executor runs.
+It found 3 real routing bugs on first run (all fixed):
+
+| Missed phrasing | Cause |
+|---|---|
+| `above INR 6 Cr` | unit alternation had `crore` but not the abbreviation `Cr` |
+| `runner-up` | rank_value only knew `second` / `2nd` |
+| `lacking letters` | absence required the full phrase `letter on file` |
+
+**Add a case here whenever the leaderboard suggests a shape is bleeding** — it is
+the cheapest way to find a routing gap without gold answers.
+
+## The four traps, and how they're handled
+
+1. **pdfplumber silently drops table values** — returns field labels, no values,
+   no error (15 digits vs PyMuPDF's 129 on `DOC-CC-001`). PyMuPDF everywhere.
+2. **Two label vocabularies per doc type** — `Work`/`Executed Value`/`Project Lead`
+   vs `Project Name`/`Contract Value`/`Project Manager`, plus 71 completion
+   certificates that are pure prose. Synonym map + prose regex fallbacks.
+3. **Dates are day-first** — `06/02/2011` is 6 Feb, verified against
+   `DOC-CC-001`. Reading it as US format silently breaks every `date_span`.
+   Asserted in `test_components.py`.
+4. **Client names differ only by case** — `(psu)` vs `(Psu)` splits one client
+   into two and corrupts every aggregate. 51 raw strings → 28 real clients.
+
+Two more worth knowing:
+
+- **`hop_aggregate` means the client's ENTIRE portfolio**, even when the question
+  says "assignments *he* delivered". The person only identifies the client.
+  Scoping it to the person's own works fails HS-IC-0007 and HS-IC-0008.
+- **Grading lives only in prose.** `is graded X` (84 table certs), `assessed the
+  completed work as X` (59 company certs), and prose certificates whose
+  assessment paragraph reads "taken over on **satisfactory** completion" → the
+  other two prose paragraphs carry no grade. The universal boilerplate "The
+  quality of work has been found satisfactory…" appears on certificates graded
+  *Good* — treating it as a grade poisons `doc_filtered_aggregate`.
+
+## Router
+
+Deterministic is **primary**: instant, free, offline, 25/25. The LLM backend is
+escalation only, and only overrides where the deterministic router reports
+confidence < 1.0.
+
+Deliberate: the `claude` CLI hits a session limit and would consume the
+operator's own quota mid-competition. `router.route_llm()` is written against
+the Anthropic SDK (`claude-opus-5`, batched, structured output) and activates
+only when `ANTHROPIC_API_KEY` is set — `python src/answer.py --llm`.
+
+## Answering policy
+
+Never blank. Blank = 0, wrong guess = 0, rough guess can = 0.3. Ladder:
+router → nearest simpler shape on the same client → client total → corpus
+median for that answer type. Every fallback is logged to `work/answer_log.json`.
+
+## Teammate brief — independent reconciliation
+
+Write **only** `src/alt_extract.py` → `work/db_alt.json`. Do not touch anything
+else; there are then no merge conflicts.
+
+Route: `DOC-PPP-001` (portfolio, 64 pages, all 155 works) + the 155
+`completion_certificate` PDFs. Deliberately *not* the company completion
+certificates — that is the primary route, and reusing it would prove nothing.
+
+```json
+{"works": [{"work": "RCC Bridge — Gujarat Pkg-1", "value": 333800000,
+            "client": "National Special Projects Office",
+            "completed": "2011-02-06", "lead": "Suresh Desai", "role": "Prime"}]}
+```
+
+Then `python src/reconcile.py` → `work/recon_report.md`. Every mismatch is a
+real bug in one of the two routes — open the document and read the field.
+Prioritise disagreements on the 23 works lacking a reference letter: absence
+questions are where a plausible-but-wrong answer is most likely.
+
+`python src/reconcile.py --selftest` proves the harness detects seeded errors
+(it currently catches 3/3) — run it before trusting a clean report.
+
+## Open items
+
+- ~~Register on the platform~~ — **done 9 Aug.**
+- **P2, deferred: the 9 workbooks + ledgers.** None of the 13 observed shapes
+  touch them, but `BRIEFING.md` says some values are "reachable nowhere else".
+  Structure is known and clean (`Receivables_Ageing` 520 rows,
+  `Trial_Balance_by_Year` 7 sheets, `Plant_and_Machinery_Register` 212 rows);
+  openpyxl reads them directly. Revisit only if the leaderboard shows a shape
+  family scoring near zero.
+- One work has no role (154/155). Only matters if a `role_split` question names
+  that specific work's client.
+- Optional: email organizers re: the website/`evaluate.py` scoring discrepancy.
+  Not blocking — exactness wins under either formula.
