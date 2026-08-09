@@ -86,18 +86,74 @@ RULES = [
 ]
 
 
+# 12 of the 28 clients (43%) share a name "head" with at least one other:
+# three Jal Nigam, four Public Works Department, three Irrigation & Waterways,
+# two Public Health Engineering. Only the state distinguishes them.
+#
+# The previous head-match fallback picked whichever shared head it saw first,
+# which -- since db.clients is sorted -- was always the alphabetically-first
+# member. "Jal Nigam in Uttar Pradesh" resolved to "Jal Nigam, Gujarat", at full
+# confidence. Six of fifteen realistic phrasings resolved to the WRONG client.
+#
+# Token-coverage matching fixes this: the state token is part of the client's
+# token set, so the correct member scores strictly higher. On a tie we return
+# None rather than guess -- an unresolved client is flagged by the confidence
+# floor and lands in the triage log; a wrongly-resolved one is invisible.
+
+_STOP = {"of", "the", "and", "in", "for", "at", "to", "a", "an",
+         "govt", "government", "we", "our", "us"}
+
+_ABBREV = {
+    r"\bpwd\b": "public works department",
+    r"\bphed\b": "public health engineering department",
+    r"\bnicl\b": "national infrastructure corp ltd",
+}
+
+
+def _norm_match(s):
+    """Fold the spelling variants questions actually use into one form."""
+    s = s.lower()
+    s = s.replace("&", " and ")
+    for pat, rep in _ABBREV.items():
+        s = re.sub(pat, rep, s)
+    s = re.sub(r"\bgovt\b", "government", s)
+    s = re.sub(r"\bdept\b", "department", s)
+    s = re.sub(r"\bcorp\b", "corporation", s)
+    s = re.sub(r"\bltd\b", "limited", s)
+    s = re.sub(r"[^a-z0-9]+", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _tokens(s):
+    return {t for t in _norm_match(s).split() if t not in _STOP}
+
+
 def _mine_client(db, q):
-    """Longest canonical client name mentioned; else longest head-of-name match."""
-    ql = q.lower()
-    hits = [c for c in db.clients if c.lower() in ql]
+    """Resolve a client mention, or None. Never guesses between ambiguous ones."""
+    qn = _norm_match(q)
+    # 1. the whole canonical name appears verbatim -- longest wins
+    hits = [c for c in db.clients if _norm_match(c) in qn]
     if hits:
         return max(hits, key=len)
-    best, score = None, 0
+
+    # 2. token coverage: what fraction of THIS client's distinctive tokens are
+    #    present? The state token is what separates the ambiguous groups.
+    qtok = set(qn.split())
+    scored = []
     for c in db.clients:
-        head = re.split(r"[,(]", c)[0].strip()
-        if head and head.lower() in ql and len(head) > score:
-            best, score = c, len(head)
-    return best
+        ctok = _tokens(c)
+        if not ctok:
+            continue
+        scored.append((len(ctok & qtok) / len(ctok), len(ctok), c))
+    if not scored:
+        return None
+    top = max(s[0] for s in scored)
+    if top < 0.75:                       # too weak to be a real mention
+        return None
+    winners = [s for s in scored if s[0] == top]
+    if len(winners) > 1:                 # genuinely ambiguous -- refuse to guess
+        return None
+    return winners[0][2]
 
 
 def _mine_person(db, q):

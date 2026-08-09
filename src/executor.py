@@ -26,7 +26,14 @@ class DB:
 
     # ---------------------------------------------------------- resolution
     def client(self, name):
-        """Resolve a client mention to one of the 28 canonical names."""
+        """Resolve a client mention to one of the 28 canonical names, or None.
+
+        12 of 28 clients differ from a sibling only by state name, and
+        difflib scores those siblings almost identically -- so a bare
+        get_close_matches() will confidently return the wrong one. Where the
+        candidates are near-indistinguishable we return None instead: an
+        unresolved client is visible in triage, a misresolved one is not.
+        """
         if not name:
             return None
         n = name.strip().lower()
@@ -36,10 +43,24 @@ class DB:
         cands = [c for c in self.clients if n in c.lower() or c.lower() in n]
         if len(cands) == 1:
             return cands[0]
-        if cands:                       # prefer the closest of several substring hits
-            return max(cands, key=lambda c: difflib.SequenceMatcher(None, n, c.lower()).ratio())
-        m = difflib.get_close_matches(name, self.clients, n=1, cutoff=0.6)
-        return m[0] if m else None
+        if cands:
+            ranked = sorted(cands, reverse=True,
+                            key=lambda c: difflib.SequenceMatcher(None, n, c.lower()).ratio())
+            best = difflib.SequenceMatcher(None, n, ranked[0].lower()).ratio()
+            if len(ranked) > 1:
+                second = difflib.SequenceMatcher(None, n, ranked[1].lower()).ratio()
+                if best - second < 0.10:        # too close to call
+                    return None
+            return ranked[0]
+        m = difflib.get_close_matches(name, self.clients, n=2, cutoff=0.6)
+        if not m:
+            return None
+        if len(m) > 1:
+            r0 = difflib.SequenceMatcher(None, name.lower(), m[0].lower()).ratio()
+            r1 = difflib.SequenceMatcher(None, name.lower(), m[1].lower()).ratio()
+            if r0 - r1 < 0.10:
+                return None
+        return m[0]
 
     def person(self, name):
         if not name:

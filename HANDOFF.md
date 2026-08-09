@@ -66,11 +66,30 @@ Rebuild from scratch: `python src/build_db.py && python src/answer.py`
 ```bash
 python src/test_components.py      # invariants + published intermediates
 python src/test_executor.py        # 25/25 executor
-python src/test_router_stress.py   # 37/37 on unseen paraphrases
+python src/test_router_stress.py   # 46/46 on unseen paraphrases
+python src/test_entities.py        # 33/33 client + person resolution
 python src/answer.py --per-question # 25/25 end to end
 cd dataset && python evaluate.py --submission ../work/submission.jsonl \
     --questions sample_questions.json
 ```
+
+**`test_entities.py` guards the most dangerous failure class.** 12 of the 28
+clients differ from a sibling only by state name (three *Jal Nigam*, four
+*Public Works Department*, three *Irrigation & Waterways*, two *Public Health
+Engineering*). The original head-match fallback returned the alphabetically-first
+sibling, so `"Jal Nigam in Uttar Pradesh"` silently became `"Jal Nigam, Gujarat"`
+at full confidence — 6 of 15 realistic phrasings resolved to the **wrong** client.
+
+Resolution now scores token coverage and **returns `None` on a tie rather than
+guessing**. The three outcomes are not equally bad:
+
+| Outcome | Meaning |
+|---|---|
+| correct | the goal |
+| `None` | safe — confidence drops to 0, question lands in the triage log |
+| **wrong** | silent — a confident, plausible, entirely incorrect number |
+
+The test asserts **zero wrong**. A `None` on a hard phrasing is acceptable.
 
 Invariants: 155 works · 28 clients · 132 with a reference letter · 23 without ·
 total ₹5,530.40 Cr (README says ~5,530) · 48 credentials (39 PMP + 9 Six Sigma).
