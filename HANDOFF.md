@@ -15,14 +15,30 @@ Scoring is the repo's `evaluate.py` bands (1.0 / 0.7 / 0.3 / 0), **not** the
 website's linear formula. The cliff at 0.5% relative error is the design
 constraint: approximately right is worth almost nothing.
 
-## When validation drops — the only command that matters
+## Submission protocol — read before the drop
+
+The platform requires a **40-char commit SHA** with every submission, recorded so
+judges can verify the code afterwards. So **every submission needs its own
+commit** — resubmitting a SHA already used is refused.
 
 ```bash
 python src/answer.py --questions <validation.json> --out work/submission.jsonl --per-question
+git add -A && git commit -m "submission N: <what changed>"
+git rev-parse HEAD          # paste this 40-char string with the upload
 ```
 
-Submit within the first hour even if imperfect. The leaderboard is the only
-signal about the hidden set. Then triage by shape from the per-question output.
+Platform rules that shape strategy:
+
+| Rule | Consequence |
+|---|---|
+| Score = mean over **all** questions, out of 100 | An unanswered question scores 0 **and still counts** — never leave one blank. Already enforced by the fallback ladder. |
+| Attempts are limited per team, with cooldowns | Do **not** burn attempts on speculative tweaks. Each one must be a considered improvement. |
+| Attempts consumed only by **accepted** files | A rejected/malformed file is free. A duplicate SHA is refused, also free. |
+| Repo private during, public after | Keep it private. Hand over the URL once submissions close. |
+
+Because attempts are capped, the earlier "submit early even if imperfect" advice
+is **wrong**. Submit once early to prove the mechanism works and get a baseline,
+then hold remaining attempts for changes justified by the per-shape breakdown.
 
 ## What exists
 
