@@ -44,10 +44,25 @@ def parse_portfolio(text):
         for j, line in enumerate(block):
             lab = line.strip()
             if lab in _LABELS and lab not in vals:
-                for nxt in block[j + 1:j + 3]:
-                    if nxt.strip():
-                        vals[lab] = nxt.strip()
-                        break
+                for off, nxt in enumerate(block[j + 1:j + 3]):
+                    if not nxt.strip():
+                        continue
+                    val = nxt.strip()
+                    # A long client name plus its role annotation can exceed the
+                    # column width and wrap, splitting "(JV Partner)" across two
+                    # lines -- e.g. Pkg-26, the one such entry in 155:
+                    #     'Irrigation & Waterways Dept, Govt of Uttar Pradesh (JV'
+                    #     'Partner)'
+                    # Left unjoined, the role regex needs a closing paren, finds
+                    # none, and the work silently has no role at all.
+                    look = j + 1 + off + 1
+                    while val.count("(") > val.count(")") and look < len(block):
+                        nxt2 = block[look].strip()
+                        if nxt2:
+                            val = f"{val} {nxt2}"
+                        look += 1
+                    vals[lab] = val
+                    break
         client_raw = vals.get("Client", "")
         rm = _ROLE.search(client_raw)
         role = rm.group(1).title().replace("Jv", "JV") if rm else None
