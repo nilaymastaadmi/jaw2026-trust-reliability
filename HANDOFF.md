@@ -177,12 +177,34 @@ questions are where a plausible-but-wrong answer is most likely.
 ## Open items
 
 - ~~Register on the platform~~ — **done 9 Aug.**
-- **P2, deferred: the 9 workbooks + ledgers.** None of the 13 observed shapes
-  touch them, but `BRIEFING.md` says some values are "reachable nowhere else".
-  Structure is known and clean (`Receivables_Ageing` 520 rows,
-  `Trial_Balance_by_Year` 7 sheets, `Plant_and_Machinery_Register` 212 rows);
-  openpyxl reads them directly. Revisit only if the leaderboard shows a shape
-  family scoring near zero.
+- **Workbooks: data extracted, shapes deliberately NOT built.**
+  `python src/parse_workbooks.py` → `work/finance.json`. Kept out of the answer
+  path; nothing downstream depends on it.
+
+  *Why extract:* `BRIEFING.md` frames questions as what a bidder must prove about
+  "past performance, credentials, **financial standing** and personnel". We cover
+  three of those four and none of the financial one — and the workbook values
+  genuinely are reachable nowhere else (confirmed: receivables ageing, trial
+  balance, plant register and BOQ line items appear in no PDF).
+
+  *Why not build shapes:* the README says the hidden set is "the same kinds of
+  question" as the samples; all 25 map to the 13 shapes, and the labelled `shape`
+  field looks like a fixed taxonomy. Guessing a financial question's form risks a
+  working 100% system for speculative gain.
+
+  **If validation shows financial questions**, the data is already parsed — write
+  only the executor shape. ~20 minutes, not two hours.
+
+  Verified linkage:
+  - `receivables.by_client` keys on our canonical clients (24 of 28 present;
+    ₹1,750 Cr invoiced, ₹263 Cr outstanding across 519 invoices).
+  - `Public Health Engineering Dept, West Bengal` appears in receivables but has
+    **no completed work** — only a tender dossier and an RA bill mention it. Its
+    absence from our 28 is correct, not a parsing miss.
+  - BOQ contracts join to works by package number (Contract 71 ↔ `Pkg-71`), but
+    only 6 of 155 works have one, and **BOQ totals run ~2× the certificate
+    value** — they measure gross measured quantity, not contract value. Do not
+    conflate the two.
 - One work has no role (154/155). Only matters if a `role_split` question names
   that specific work's client.
 - Optional: email organizers re: the website/`evaluate.py` scoring discrepancy.
