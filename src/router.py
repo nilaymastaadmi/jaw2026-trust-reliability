@@ -23,14 +23,32 @@ SHAPES = ["absence", "referenced_share", "rank_value", "threshold_aggregate",
           "avg_work_size", "role_split", "hop_aggregate", "temporal_chain",
           "distinct_count", "date_span", "client_total"]
 
+# Exclusion wording, shared by the classifier rule and the category miner so the
+# two can never drift apart -- a question that classifies as an exclusion but
+# whose category cannot be mined sums the WHOLE portfolio, which on a real case
+# measured 52.9% error at full confidence.
+_EXCL_WORDS = (r"excluding|except(?:\s+for)?|other than|apart from|but not|ignoring"
+               r"|leaving out|not including|without counting|besides|excl\.?")
+_EXCL_TRIGGER = r"\b(?:" + _EXCL_WORDS + r")\b"
+
 # Ordered most-specific first: the first rule that fires wins.  Each entry is
 # (shape, regex, weight) -- weight feeds the confidence score so the caller can
 # decide whether to escalate.
+# Order matters -- first match wins. Most specific first.
+#
+# role_split sits ABOVE referenced_share deliberately: "what is our JV Partner
+# share of X" contains "share of", which is a referenced_share trigger, and
+# would otherwise be answered as a percentage instead of a rupee total.
 RULES = [
     ("date_span", r"\b(?:how many days|number of days|days (?:passed|between|elapsed)"
                   r"|exact interval|what is the interval|days from)\b", 3),
+    ("role_split", r"\bas\s+(?:a\s+)?(?:prime|jv partner|sub-?contractor)\b", 3),
+    ("role_split", r"\b(?:prime|jv[-\s]?partner)\b[^.?]{0,30}"
+                   r"\b(?:share|total|value|aggregate|sum|worth|portion)\b", 3),
+    ("role_split", r"\b(?:share|total|value|aggregate|sum|portion)\b[^.?]{0,30}"
+                   r"\b(?:as\s+)?(?:prime|jv[-\s]?partner)\b", 3),
     ("referenced_share", r"\b(?:out of one hundred|share of|what percentage|percent of"
-                         r"|divided by the total)\b", 3),
+                         r"|divided by the total|what fraction)\b", 3),
     ("absence", r"\b(?:no|lack(?:s|ing)?|without|missing|absent|have no|don'?t have"
                 r"|un-?referenced)\b[^.?]{0,40}"
                 r"\b(?:reference letters?|client references?|letters?|verification)\b", 3),
@@ -48,18 +66,20 @@ RULES = [
                             r"[^.?]{0,40}"
                             r"\b(?:crores?|lakhs?|lacs?|Cr|mark|line|threshold)\b", 3),
     ("threshold_aggregate", r"\b(?:crores?|lakhs?|lacs?|Cr)\b\s*(?:or more|and above|\+)", 3),
-    ("exclusion_aggregate", r"\b(?:excluding|except|other than|apart from|but not)\b", 3),
-    ("role_split", r"\bas\s+(?:a\s+)?(?:prime|jv partner|sub-?contractor)\b", 3),
-    ("role_split", r"\b(?:prime|jv partner)\s*[—–-]", 2),
+    ("exclusion_aggregate", _EXCL_TRIGGER, 3),
     ("distinct_count", r"\b(?:how many (?:different|distinct|unique)|distinct\s+\w+"
-                       r"|different (?:categories|types|classifications)"
-                       r"|how many (?:categories|classifications))\b", 3),
+                       r"|different (?:categories|types|classifications|kinds)"
+                       r"|how many (?:categories|classifications|kinds|types))\b", 3),
     ("avg_work_size", r"\b(?:average|mean|typical)\b[^.?]{0,30}"
-                      r"\b(?:size|value|project|work|assignment)\b", 3),
-    ("temporal_chain", r"\b(?:completed|wrapped up|finished|delivered|concluded)\b"
-                       r"[^.?]{0,40}\bafter\b", 3),
-    ("temporal_chain", r"\bafter (?:that|her|his|the) (?:date|certification|issuance)\b", 3),
+                      r"\b(?:size|value|project|work|assignment|contract)\b", 3),
+    ("temporal_chain", r"\b(?:completed|wrapped up|finished|finishing|delivered|concluded"
+                       r"|closed out|handed over)\b[^.?]{0,40}"
+                       r"\b(?:after|since|later than|post[-\s])", 3),
+    ("temporal_chain", r"\b(?:after|since|post[-\s]?)"
+                       r"(?:that|her|his|their|the)?\s*"
+                       r"(?:date|certification|certificate|issuance|credential|PMP|Six Sigma)\b", 3),
     ("doc_filtered_aggregate", r"\b(?:graded|marked|rated|assessed)\b", 2),
+    ("doc_filtered_aggregate", r"\bgrad(?:e|ing)\b[^.?]{0,20}\b(?:is|of|was|as)\b", 2),
     ("hop_aggregate", r"\b(?:combined value|total value|aggregate value|sum of"
                       r"|combined amount|total amount|aggregate of)\b", 1),
     ("client_total", r"\b(?:total|combined|aggregate|overall)\b[^.?]{0,30}\bvalue\b", 0),
@@ -98,10 +118,25 @@ def _mine_work(q):
     return None
 
 
+# The terminator is a LOOKAHEAD, and it includes ? and !. The original pattern
+# required a comma/period/end-of-string, so "…excluding buildings?" -- the
+# exclusion trailing the sentence, which is the commonest natural phrasing --
+# matched nothing and the whole portfolio was summed instead.
+_CATEGORY = re.compile(
+    r"\b(?:" + _EXCL_WORDS + r")\s+"
+    r"(?:the\s+|any\s+|all\s+)?"
+    r"([A-Za-z][A-Za-z\s&/-]*?)"
+    r"(?=[,;.?!]|$|\s+(?:what|how|give|show|tell|and|for|please|work|project)\b)",
+    re.I)
+
+
 def _mine_category(q):
-    m = re.search(r"\b(?:excluding|except|other than|apart from)\s+([a-z ]+?)"
-                  r"(?:,|;|\.|\s+what|\s+what's|\s+how|$)", q, re.I)
-    return m.group(1).strip() if m else None
+    m = _CATEGORY.search(q)
+    if not m:
+        return None
+    cat = re.sub(r"\s+", " ", m.group(1)).strip(" .,;-")
+    # guard against swallowing a trailing verb phrase
+    return cat or None
 
 
 def _mine_grading(q):
@@ -147,6 +182,11 @@ def route(db, question):
             plan["shape"], plan["confidence"] = "client_total", 0.0
     if shape == "exclusion_aggregate":
         plan["category"] = _mine_category(question)
+        # An exclusion with no identifiable category would silently sum the whole
+        # portfolio at full confidence. Drop confidence so it surfaces in triage;
+        # the executor refuses to run it, so the fallback ladder logs it too.
+        if not plan["category"]:
+            plan["confidence"] = 0.0
     if shape == "doc_filtered_aggregate":
         plan["grading"] = _mine_grading(question)
         if not plan["grading"]:

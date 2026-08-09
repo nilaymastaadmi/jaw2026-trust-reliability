@@ -119,6 +119,39 @@ CASES = [
      {"person": "Asha Nair"}),
     ("date_span", "What is the interval in days from Chandan Banerjee's certification to the finish of WTP Augmentation — West Bengal Pkg-51?",
      {"person": "Chandan Banerjee"}),
+
+    # ================================================================
+    # REGRESSION GUARDS — every case below is a bug that shipped.
+    #
+    # The exclusion block is the important one. The category miner required a
+    # comma/period/end-of-string terminator, so an exclusion trailing the
+    # sentence ("...excluding buildings?") mined NOTHING, and the shape then
+    # summed the entire portfolio: 52.9% error, reported at confidence 1.00
+    # with no triage signal. Confident and wrong is the worst failure the
+    # scoring bands can punish. Keep every phrasing here.
+    # ================================================================
+    ("exclusion_aggregate", "What is the aggregate value of every project for Irrigation & Waterways Dept, Govt of West Bengal, excluding buildings?",
+     {"client": "Irrigation & Waterways Dept, Govt of West Bengal", "category": "buildings"}),
+    ("exclusion_aggregate", "Total the works for Irrigation & Waterways Dept, Govt of West Bengal, but not buildings.",
+     {"category": "buildings"}),
+    ("exclusion_aggregate", "What have we delivered in total for Irrigation & Waterways Dept, Govt of West Bengal apart from buildings?",
+     {"category": "buildings"}),
+    ("exclusion_aggregate", "Ignoring buildings, what is the total for Irrigation & Waterways Dept, Govt of West Bengal?",
+     {"category": "buildings"}),
+    ("exclusion_aggregate", "For Jharkhand Municipal Corporation, sum everything leaving out roads maintenance.",
+     {"category": "roads maintenance"}),
+
+    # "share of" is a referenced_share trigger; role_split must win when a role
+    # is named, or a rupee total is answered as a percentage.
+    ("role_split", "What is our JV Partner share of the Public Works Department, Govt of Maharashtra?",
+     {"client": "Public Works Department, Govt of Maharashtra", "role": "JV Partner"}),
+
+    ("temporal_chain", "What's the combined value of Gautam Joshi's projects that closed out post-certification?",
+     {"person": "Gautam Joshi"}),
+    ("temporal_chain", "Total value of Imran Joshi's works finishing later than his PMP date?",
+     {"person": "Imran Joshi"}),
+    ("doc_filtered_aggregate", "Jal Nigam, Jharkhand: total value where the grading is Excellent.",
+     {"client": "Jal Nigam, Jharkhand", "grading": "Excellent"}),
 ]
 
 

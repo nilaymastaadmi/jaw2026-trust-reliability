@@ -129,6 +129,11 @@ def gap_to_threshold(db, client=None, threshold=None, **_):
 
 
 def exclusion_aggregate(db, client=None, category=None, **_):
+    # Refuse rather than silently sum everything: with no category, _cat_match is
+    # False for every work and this returns the FULL portfolio -- a confident,
+    # badly wrong number. Returning None routes it to the logged fallback ladder.
+    if not category:
+        return None
     return sum(w["value"] for w in db.portfolio(client)
                if w.get("value") is not None and not _cat_match(w, category))
 
