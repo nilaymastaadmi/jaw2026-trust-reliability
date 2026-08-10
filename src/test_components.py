@@ -102,13 +102,37 @@ def main():
               f"\n        want {want}\n        got  {got}")
     print(f"  ({checked} questions publish intermediates)")
 
-    print("\n--- grading extraction (doc_filtered_aggregate depends on it) ---")
+    print("\n--- grading: assert we do NOT over-infer ---")
+    # Inverted deliberately. On 2026-08-09 the dataset authors withdrew
+    # HS-IC-0013/0014 and excluded grading-filtered questions from scoring:
+    #   "41 of 155 works have a grading stated nowhere in their own documents,
+    #    and 17 of those carry a grading WORD that is not their grade."
+    # An earlier rule here read the boilerplate "taken over on satisfactory
+    # completion" as a grade, which is exactly that error, and it had been
+    # reverse-engineered from a gold answer rather than from the documents.
+    # So the risk to guard is fabricating grades, NOT missing them: a work whose
+    # certificate never names a grade must carry None.
     graded = [w for w in works if w.get("grading")]
     dist = {}
     for w in graded:
         dist[w["grading"]] = dist.get(w["grading"], 0) + 1
-    check("grading present on >=85% of works", len(graded) >= 132,
-          f"got {len(graded)}/155")
+    check("grading not over-inferred (<=130 of 155)", len(graded) <= 130,
+          f"got {len(graded)}/155 — a jump here means a rule is reading boilerplate")
+    # A grade may legitimately come from EITHER certificate, so check both.
+    def states_a_grade(w):
+        for doc in (w.get("cc_id"), w.get("ccc_id")):
+            if not doc:
+                continue
+            flat = re.sub(r"\s+", " ", corpus.text(doc))
+            if re.search(r"is\s+graded|\bgraded\s+(?:as\s+)?[A-Z]"
+                         r"|assessed the completed work as", flat):
+                return True
+        return False
+
+    unstated = [w["work"] for w in graded if not states_a_grade(w)]
+    check("every graded work has a certificate that states the grade",
+          not unstated, f"{len(unstated)} graded from boilerplate: {unstated[:3]}")
+    print(f"       {len(graded)}/155 graded, {155 - len(graded)} correctly None")
     print(f"       distribution: {dist}")
 
     print("\n--- role extraction (role_split depends on it) ---")

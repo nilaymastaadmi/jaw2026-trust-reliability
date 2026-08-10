@@ -180,17 +180,24 @@ _GRADE_PATTERNS = [
     r"representative\s+assessed[^.]*?\bas\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
 ]
 
-# Prose certificates carry no grade field.  Of the three assessment paragraphs
-# they use, only this one is an assessment: the client records that the work was
-# taken over on *satisfactory* completion.  Verified against HS-IC-0014, whose
-# gold counts DOC-CC-115 (this paragraph, no other grade anywhere in its ten
-# related documents) as Satisfactory.
-_PROSE_SATISFACTORY = re.compile(
-    r"taken\s+over\s+on\s+satisfactory\s+completion", re.I)
+# DO NOT infer a grade from prose that merely contains a grading word.
+#
+# An earlier version read "taken over on satisfactory completion" as a grade of
+# Satisfactory. That was wrong, and it was wrong in the specific way the dataset
+# authors later measured: on 2026-08-09 they withdrew HS-IC-0013/0014 and
+# excluded grading-filtered questions from scoring, reporting that
+#
+#   "41 of 155 works have a grading stated nowhere in their own documents, and
+#    17 of those carry a grading WORD that is not their grade."
+#
+# The rule had been reverse-engineered to make HS-IC-0014's gold come out, so it
+# encoded the gold rather than the documents. Grading is now reported ONLY where
+# a certificate states it outright; works whose documents never name a grade
+# correctly carry None.
 
 
 def find_grading(text):
-    """Client's written assessment.  None when the corpus does not state one."""
+    """Client's written assessment, or None when no document states one."""
     flat = re.sub(r"\s+", " ", text)
     for p in _GRADE_PATTERNS:
         m = re.search(p, flat)
@@ -199,6 +206,4 @@ def find_grading(text):
             for known in GRADES:
                 if g.lower() == known.lower():
                     return known
-    if _PROSE_SATISFACTORY.search(flat):
-        return "Satisfactory"
     return None
