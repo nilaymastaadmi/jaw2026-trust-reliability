@@ -15,6 +15,40 @@ Scoring is the repo's `evaluate.py` bands (1.0 / 0.7 / 0.3 / 0), **not** the
 website's linear formula. The cliff at 0.5% relative error is the design
 constraint: approximately right is worth almost nothing.
 
+## THE EVALUATION SET IS LIVE (dropped 10 Aug, 15:00)
+
+`dataset/questions.json` — **371 questions**, qid + text + `answer_type`
+(money 233 / percent 55 / count 59 / days 24). No shapes, no answers.
+
+**Scoring changed to proportional** — the bands are gone:
+
+```
+score = max(0, 1 - |your answer - correct| / correct)
+```
+
+A 5% error now scores **0.95** where the old bands gave 0.30. Consequences:
+approximate answers are worth most of their credit, the fallback ladder matters
+far more than it did, and a blank still scores 0 — so **always emit a number**.
+Exact-first is still dominant, so the architecture is unchanged.
+
+**Submission is CSV**, not JSONL:
+
+```
+question_id,answer
+HV-IC-0001,2942400000
+```
+
+Generate and self-verify:
+
+```bash
+python src/answer.py --questions dataset/questions.json --out work/submission.csv --force
+```
+
+It refuses to overwrite a larger existing submission unless `--force` is passed
+(a default-args test run once silently replaced 371 answers with 23), and it
+re-reads the result through the organisers' own `read_submission()` to confirm
+every qid is present and numeric.
+
 ## Submission protocol — read before the drop
 
 The platform requires a **40-char commit SHA** with every submission, recorded so

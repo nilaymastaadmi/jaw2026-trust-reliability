@@ -181,13 +181,44 @@ def main():
     ap.add_argument("--out", default=str(corpus.WORK / "submission.csv"))
     ap.add_argument("--llm", action="store_true", help="escalate low-confidence to the LLM router")
     ap.add_argument("--per-question", action="store_true")
+    ap.add_argument("--force", action="store_true",
+                    help="allow overwriting a larger existing submission")
     a = ap.parse_args()
 
     questions = load_questions(a.questions)
     rows = answer_all(questions, use_llm=a.llm)
     corpus.WORK.mkdir(parents=True, exist_ok=True)
+
+    # Refuse to shrink an existing submission. Running this with the default
+    # --out while testing against the 23 samples silently replaced a finished
+    # 371-row submission with 23 rows -- the file still looked valid. Losing 348
+    # answers an hour before the deadline is not a recoverable mistake.
+    out = Path(a.out)
+    if out.exists() and not a.force:
+        with open(out, newline="", encoding="utf-8") as fh:
+            existing = max(0, sum(1 for _ in csv.reader(fh)) - 1)
+        if existing > len(rows):
+            raise SystemExit(
+                f"[guard] {out.name} already holds {existing} answers; this run "
+                f"produced only {len(rows)}.\n"
+                f"[guard] Refusing to overwrite. Use a different --out, or pass "
+                f"--force if you really mean to shrink it.")
+
     write_submission(rows, a.out)
     corpus.save_json("answer_log.json", rows)
+
+    # Always verify what we just wrote, using the official reader when available.
+    try:
+        sys.path.insert(0, str(corpus.DATA))
+        import evaluate as official
+        parsed = official.read_submission(str(out))
+        missing = {q["qid"] for q in questions} - set(parsed)
+        print(f"[verify] official reader parsed {len(parsed)}/{len(rows)} rows; "
+              f"missing qids: {len(missing)}")
+        if missing:
+            print(f"[verify] WARNING missing: {sorted(missing)[:5]}")
+    except Exception as e:                      # never block on the check itself
+        print(f"[verify] skipped ({e})")
 
     result = score(rows)
     if a.per_question:
