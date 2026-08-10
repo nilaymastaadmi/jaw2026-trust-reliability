@@ -23,6 +23,13 @@ class DB:
         self.persons = {p["name"]: p for p in db["persons"]}
         self.clients = sorted({w["client"] for w in self.works if w.get("client")})
         self._by_key = {w["work_key"]: w for w in self.works}
+        # package number -> work. Unique across all 155, so it identifies a work
+        # outright regardless of how the name around it is spelled or ordered.
+        self._by_pkg = {}
+        for w in self.works:
+            m = re.search(r"Pkg[\s\-_]*(\d{1,3})", w.get("work") or "", re.I)
+            if m:
+                self._by_pkg[int(m.group(1))] = w
 
     # ---------------------------------------------------------- resolution
     def client(self, name):
@@ -73,6 +80,21 @@ class DB:
         return self.persons[m[0]] if m else None
 
     def work(self, name):
+        """Resolve a work mention. The package number is the strongest handle.
+
+        Every one of the 155 works ends in "Pkg-<n>" and every n from 1..155 is
+        unique, so a bare package number identifies a work outright -- which
+        survives the lowercased, reordered forms the questions actually use
+        ("delhi pkg 37 wtp augmentation"). Name matching alone resolved 69 of
+        the 99 package-referencing questions; the number resolves all of them.
+        """
+        if not name:
+            return None
+        m = re.search(r"pkg[\s\-_]*(\d{1,3})\b", str(name), re.I)
+        if m:
+            w = self._by_pkg.get(int(m.group(1)))
+            if w:
+                return w
         from normalize import norm_work
         k = norm_work(name)
         if k in self._by_key:

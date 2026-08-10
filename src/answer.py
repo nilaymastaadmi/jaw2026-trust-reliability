@@ -6,6 +6,7 @@ emitting a number is free upside on every question.  The fallback ladder is
 logged per question so triage knows what was computed vs guessed.
 """
 import argparse
+import csv
 import json
 import statistics
 import sys
@@ -59,33 +60,46 @@ def load_questions(path):
     return out
 
 
+# A fallback must produce the RIGHT KIND of number. Scoring is proportional --
+# score = max(0, 1 - |got-gold|/gold) -- so answering a "how many works" question
+# with a rupee total is not merely wrong, it is unboundedly wrong and scores 0.
+# A plausible small integer scores something. Ladder per unit:
+_FALLBACK_CHAIN = {
+    "money":   ("client_total", "avg_work_size", "hop_aggregate"),
+    "count":   ("distinct_count", "absence"),
+    "percent": ("referenced_share",),
+    "days":    ("date_span",),
+}
+
+
 def fallbacks(db, plan, q, corpus_medians):
-    """Ladder: nearest simpler shape -> client total -> corpus median."""
-    tried = []
-    if plan.get("client"):
-        for shape in ("client_total", "avg_work_size"):
-            got = executor.run(db, {**plan, "shape": shape})
-            tried.append(shape)
-            if got is not None:
-                return got, f"fallback:{shape}"
-    if plan.get("person"):
-        got = executor.run(db, {**plan, "shape": "temporal_chain"})
-        if got is not None:
-            return got, "fallback:temporal_chain"
+    """Nearest shape of the CORRECT unit, then a corpus-typical value."""
     t = (q.get("answer_type") or "").lower()
-    med = corpus_medians.get(t if t in corpus_medians else "value")
-    return med, "fallback:median"
+    for shape in _FALLBACK_CHAIN.get(t, ("client_total",)):
+        got = executor.run(db, {**plan, "shape": shape})
+        if got is not None:
+            return got, f"fallback:{shape}"
+
+    # Nothing ran. Emit a corpus-typical value of the right unit rather than 0:
+    # under proportional scoring a median guess earns partial credit, a 0 earns
+    # none, and a blank is scored as 0 anyway.
+    return corpus_medians.get(t, corpus_medians["money"]), "fallback:typical"
 
 
 def answer_all(questions, use_llm=False, verbose=True):
     db = executor.DB()
     vals = [w["value"] for w in db.works if w.get("value")]
+    # Typical value per unit, used only when no shape of the right unit can run.
+    # Medians, not means: the value distribution is heavily right-skewed.
+    per_client = {}
+    for w in db.works:
+        if w.get("client") and w.get("value") is not None:
+            per_client.setdefault(w["client"], []).append(w["value"])
     medians = {
-        "value": round(statistics.median(vals)),
-        "count": 3,
+        "money": round(statistics.median([sum(v) for v in per_client.values()])),
+        "count": round(statistics.median([len(v) for v in per_client.values()])),
         "days": 900,
         "percent": 50.0,
-        "percentage": 50.0,
     }
 
     llm_plans = {}
@@ -99,7 +113,7 @@ def answer_all(questions, use_llm=False, verbose=True):
 
     rows = []
     for q in questions:
-        plan = router.route(db, q["question"])
+        plan = router.route(db, q["question"], q.get("answer_type"))
         # LLM output only overrides where the deterministic router is unsure
         if q["qid"] in llm_plans and plan["confidence"] < 1.0:
             merged = {k: v for k, v in llm_plans[q["qid"]].items() if v is not None}
@@ -115,27 +129,37 @@ def answer_all(questions, use_llm=False, verbose=True):
 
 
 def write_submission(rows, path):
-    with open(path, "w", encoding="utf-8") as fh:
+    """CSV with a `question_id,answer` header -- the format the scorer reads.
+
+    Scoring is proportional: score = max(0, 1 - |got-gold|/gold). So a wrong
+    answer costs nothing beyond the credit it fails to earn, and a rough answer
+    still scores. Never emit a blank: 0 is strictly worse than any estimate.
+    """
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["question_id", "answer"])
         for r in rows:
             a = r["answer"]
             if a is None:
                 a = 0
             if isinstance(a, float) and a.is_integer():
                 a = int(a)
-            fh.write(json.dumps({"qid": r["qid"], "answer": a}) + "\n")
+            w.writerow([r["qid"], a])
     return path
 
 
 def score(rows):
     """Local scoring with the shipped bands, when golds are present."""
     def band(gold, got):
+        # Proportional, matching the shipped scorer as of the 2026-08-10 release:
+        #   score = max(0, 1 - |got - gold| / gold)
+        # There are no bands. A 5% error scores 0.95, a 50% error 0.50.
         if got is None:
             return 0.0
         gold, got = float(gold), float(got)
-        if abs(gold) < 100:
-            return 1.0 if got == gold else (0.3 if abs(got - gold) <= 1 else 0.0)
-        err = abs(got - gold) / abs(gold)
-        return 1.0 if err <= 0.005 else 0.7 if err <= 0.02 else 0.3 if err <= 0.10 else 0.0
+        if gold == 0:
+            return 1.0 if got == 0 else 0.0
+        return max(0.0, 1.0 - abs(got - gold) / abs(gold))
 
     scored = [r for r in rows if r.get("gold") is not None]
     if not scored:
@@ -154,7 +178,7 @@ def score(rows):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--questions", default=str(corpus.DATA / "sample_questions.json"))
-    ap.add_argument("--out", default=str(corpus.WORK / "submission.jsonl"))
+    ap.add_argument("--out", default=str(corpus.WORK / "submission.csv"))
     ap.add_argument("--llm", action="store_true", help="escalate low-confidence to the LLM router")
     ap.add_argument("--per-question", action="store_true")
     a = ap.parse_args()

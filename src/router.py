@@ -165,6 +165,15 @@ def _mine_person(db, q):
 
 
 def _mine_work(q):
+    """Return a work mention. A bare package number is the strongest form.
+
+    Package numbers are unique across all 155 works, so "pkg 37" identifies a
+    work outright -- which survives the lowercased, reordered phrasings the
+    questions use ("on delhi pkg 37 wtp augmentation"). db.work() resolves it.
+    """
+    m = re.search(r"\bpkg[\s\-_]*\d{1,3}\b", q, re.I)
+    if m:
+        return m.group(0)
     m = re.search(r"([A-Z][\w&/.\- ]{4,60}?\s*[—–-]\s*[\w ]+Pkg-\d+)", q)
     if m:
         return m.group(1).strip()
@@ -212,6 +221,14 @@ def _mine_role(q):
     return m.group(1) if m else "Prime"
 
 
+def _fallback_for(allowed):
+    """Most-common shape within a unit class, used when no rule fires."""
+    for pref in ("client_total", "distinct_count", "referenced_share", "date_span"):
+        if pref in allowed:
+            return pref
+    return sorted(allowed)[0]
+
+
 def classify(question):
     """-> (shape, confidence 0..1).  First matching rule wins."""
     for shape, pattern, weight in RULES:
@@ -220,9 +237,38 @@ def classify(question):
     return "client_total", 0.0
 
 
-def route(db, question):
+# Each shape produces exactly one kind of number, and the question file states
+# which kind it wants. That makes answer_type a hard constraint, not a hint:
+# only date_span yields days, only these three yield a percentage, and a money
+# question can never be answered by a count. Honouring it rescues questions
+# whose wording the lexical rules miss -- 14 "days" questions were falling
+# through to a rupee total purely because they said "days to completion?"
+# rather than "how many days".
+_TYPE_SHAPES = {
+    "days":    {"date_span"},
+    "percent": {"referenced_share"},
+    "count":   {"absence", "distinct_count"},
+    "money":   {"client_total", "hop_aggregate", "avg_work_size", "rank_value",
+                "threshold_aggregate", "gap_to_threshold", "exclusion_aggregate",
+                "doc_filtered_aggregate", "role_split", "temporal_chain"},
+}
+
+
+def route(db, question, answer_type=None):
     """-> plan dict consumed by executor.run()."""
     shape, conf = classify(question)
+
+    allowed = _TYPE_SHAPES.get((answer_type or "").lower())
+    if allowed and shape not in allowed:
+        # The lexical rules picked a shape that cannot produce the requested
+        # unit. Re-run classification restricted to shapes that can.
+        for s, pattern, weight in RULES:
+            if s in allowed and re.search(pattern, question, re.I):
+                shape, conf = s, min(1.0, weight / 3)
+                break
+        else:
+            shape = sorted(allowed)[0] if len(allowed) == 1 else _fallback_for(allowed)
+            conf = 0.5 if len(allowed) == 1 else 0.0
     plan = {
         "shape": shape,
         "confidence": conf,
@@ -249,6 +295,23 @@ def route(db, question):
             plan["shape"], plan["confidence"] = "client_total", 0.0
     if shape == "role_split":
         plan["role"] = _mine_role(question)
+    # Work -> client indirection. 99 of the 371 validation questions name a work
+    # package and then ask about "that client" or "them" without ever naming the
+    # client. Resolving the work gives us the client for free.
+    if not plan["client"] and plan.get("work"):
+        w = db.work(plan["work"])
+        if w and w.get("client"):
+            plan["client"] = w["client"]
+            plan["client_via"] = "work"
+
+    # Person -> client indirection, for the same reason ("her main client").
+    if not plan["client"] and plan.get("person"):
+        led = db.led_by(plan["person"])
+        clients = {w["client"] for w in led if w.get("client")}
+        if len(clients) == 1:
+            plan["client"] = clients.pop()
+            plan["client_via"] = "person"
+
     # a client-scoped shape with no resolvable client cannot run
     if plan["shape"] != "date_span" and not plan["client"] and not plan["person"]:
         plan["confidence"] = 0.0
