@@ -207,8 +207,15 @@ def _vals(works):
     return [w["value"] for w in works if w.get("value") is not None]
 
 
-def _folio(db, client):
-    """A client's works, or None when the client did not resolve.
+def _folio(db, client, scope=None):
+    """A client's works, the whole estate, or None when the client did not resolve.
+
+    `scope="all"` is set by the classifier only when the question names no
+    client and no person at all, which makes it estate-wide by construction --
+    "how many completed works carry a stated grading of Excellent", "Expressways
+    delivered as JV Partner, value across all clients". Every shape here is
+    otherwise scoped to one client, so those questions had no shape that could
+    run and could only be guessed at.
 
     Summing an empty portfolio yields 0, and 0 is a real number: it travels all
     the way to the submission and scores zero, instead of returning None and
@@ -217,6 +224,8 @@ def _folio(db, client):
     from this one behaviour -- every one of them a guaranteed miss where a
     partial score was available. Client-scoped shapes go through here.
     """
+    if scope == "all":
+        return db.works or None
     if not client:
         return None
     p = db.portfolio(client)
@@ -313,11 +322,14 @@ def exclusion_aggregate(db, client=None, category=None, **_):
                if w.get("value") is not None and not excluded(w))
 
 
-def doc_filtered_aggregate(db, client=None, grading=None, **_):
+def doc_filtered_aggregate(db, client=None, grading=None, scope=None,
+                           category=None, **_):
     g = (grading or "").lower().strip()
-    p = _folio(db, client)
+    p = _folio(db, client, scope)
     if not p or not g:
         return None
+    if category:
+        p = [w for w in p if _cat_match(w, category)]
     return sum(w["value"] for w in p
                if w.get("value") is not None and (w.get("grading") or "").lower() == g)
 
@@ -330,11 +342,13 @@ def avg_work_size(db, client=None, work=None, **_):
     return round(sum(v) / len(v)) if v else None
 
 
-def role_split(db, client=None, role="Prime", **_):
+def role_split(db, client=None, role="Prime", scope=None, category=None, **_):
     r = (role or "Prime").lower()
-    p = _folio(db, client)
+    p = _folio(db, client, scope)
     if not p:
         return None
+    if category:
+        p = [w for w in p if _cat_match(w, category)]
     return sum(w["value"] for w in p
                if w.get("value") is not None and (w.get("role") or "").lower() == r)
 

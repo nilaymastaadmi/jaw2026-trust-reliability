@@ -33,7 +33,13 @@ _ENTITY = [
     ("boq_item", r"\bboq\b|bill of quantit|measured (?:total|quantit)|line item"),
     ("invoice", r"\binvoice|\bbilled\b|receipt|ageing"),
     ("person", r"engineer|personnel|staff|employee|people|\bperson\b"),
-    ("client", r"\bclients?\b|\baccounts?\b(?!\s+\d)|authorit(?:y|ies)|department"),
+    # `client` as the UNIT BEING COUNTED, not as a scope phrase. "across all
+    # clients", "our clients graded Very Good" and "forget one client" are all
+    # questions about works, and a loose `\bclients?\b` claimed every one of
+    # them before `work` was ever reached.
+    ("client", r"how many (?:different |distinct |unique )?(?:clients|authorit(?:y|ies)"
+               r"|departments)|number of (?:clients|authorit(?:y|ies)|departments)"
+               r"|count of clients|how many .{0,20}accounts\b"),
     ("work", r"work|project|contract|assignment|package|job|delivered|completed"),
 ]
 
@@ -58,6 +64,36 @@ _FIELD = {
 
 _STATES = ["West Bengal", "Uttar Pradesh", "Madhya Pradesh", "Tamil Nadu",
            "Maharashtra", "Rajasthan", "Jharkhand", "Gujarat", "Odisha", "Delhi"]
+
+
+def _neg_before(term, q):
+    """Every mention of `term` is there only to rule it out."""
+    hits = list(re.finditer(r"\b" + re.escape(term) + r"\b", q, re.I))
+    if not hits:
+        return False
+    return all(re.search(r"\b(?:not|other than|rather than|excluding|except)\b[\s\w]{0,12}$",
+                         q[max(0, m.start() - 40):m.start()], re.I) for m in hits)
+
+# A contrast clause names the thing being EXCLUDED, and reading it as a filter
+# inverts the question: "delivered as JV Partner rather than as Prime" is a
+# JV question that a first-match role test answers with the Prime total.
+_CONTRAST = re.compile(r"\s+(?:rather than|as opposed to|instead of|not as|and not"
+                       r"|as against|but not)\b[^,.;?]*", re.I)
+
+
+def _drop_contrast(q):
+    return _CONTRAST.sub(" ", q)
+
+
+# Positive evidence that an estate-wide question is about the completed works
+# rather than about a document type nothing here parses. Without it, "total
+# guaranteed exposure across our performance bonds" would be answered with a
+# works figure -- a confident wrong number where the fallback ladder's
+# corpus-typical guess still earns partial credit.
+_WORK_EVIDENCE = (r"\bworks?\b|\bprojects?\b|\bcontracts?\b|\bassignments?\b"
+                  r"|\bpackages?\b|\bjobs?\b|deliver\w*|complet\w*|grad\w*"
+                  r"|reference letter|jv partner|joint venture|\bprime\b"
+                  r"|portfolio|estate|past[- ]performance")
 
 
 def _first(pairs, text):
@@ -89,13 +125,15 @@ _ESTATE = (r"across (?:the|our|all)|whole (?:completed|estate|record|portfolio|b
            r"|overall(?: total)?|forget one client|any client|all clients")
 
 
-def plan(db, gr, question, answer_type=None, client=None, category=None):
+def plan(db, gr, question, answer_type=None, client=None, category=None, estate=False):
     """-> {entity, filters, fn, field} or None when the question is not placeable."""
-    q = question
+    q = _drop_contrast(question)
     at = (answer_type or "").lower()
 
     entity = _first(_ENTITY, q)
-    if entity == "work" and client is None and re.search(_ESTATE, q, re.I):
+    if entity is None and estate and re.search(_WORK_EVIDENCE, q, re.I):
+        entity = "work"                        # estate-wide, and about the works
+    if entity == "work" and client is None and (estate or re.search(_ESTATE, q, re.I)):
         pass                                   # estate-wide: no shape can run
     elif entity not in _NO_SHAPE:
         # Either the question is about something a shape already covers, or the
@@ -163,17 +201,18 @@ def plan(db, gr, question, answer_type=None, client=None, category=None):
 
     if entity == "work":
         for g in ("Very Good", "Excellent", "Satisfactory", "Good"):
-            if re.search(r"\b" + g + r"\b", q, re.I):
+            if re.search(r"\b" + g + r"\b", q, re.I) and not _neg_before(g, q):
                 filters.append(("grading", "eq", g))
                 break
         for st in _STATES:
             if re.search(r"\b" + re.escape(st) + r"\b", q, re.I):
                 filters.append(("state", "eq", st))
                 break
-        if re.search(r"\bas (?:a )?prime\b|\bprime contractor\b", q, re.I):
-            filters.append(("role", "eq", "Prime"))
-        elif re.search(r"jv partner|joint venture", q, re.I):
+        if re.search(r"jv partner|joint venture|\bjv\b", q, re.I):
             filters.append(("role", "eq", "JV Partner"))
+        elif re.search(r"\bas (?:a )?prime\b|\bprime[- ](?:contractor|role|led)"
+                       r"|\bprime\b", q, re.I):
+            filters.append(("role", "eq", "Prime"))
         if re.search(r"no reference|without a reference|lack\w* a? ?reference"
                      r"|un-?referenced", q, re.I):
             filters.append(("has_ref", "eq", False))

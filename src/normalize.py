@@ -84,7 +84,33 @@ def threshold_from_text(text):
         n = words_to_number(m.group(1))
         if n:
             return round(n * _UNIT[m.group(2).lower()])
-    return None
+    return _bare_rupees(text)
+
+
+# A rupee figure written out in full, with no unit word to key on:
+# "contracts of 30,00,00,000 or more", "anything above 500000000". The corpus
+# and the organisers' own README write money this way as often as they write
+# crore, so a threshold reader that only understands "30 Cr" is blind to half
+# the phrasings -- and a missed threshold does not degrade the answer, it
+# changes the SHAPE, because a threshold question with no threshold falls
+# through to the client's whole portfolio.
+_BARE = re.compile(r"(?<![\d.,])(\d{1,3}(?:,\d{2,3})+|\d{7,})(?![\d.,])"
+                   r"(?!\s*(?:cr\b|crore|lakh|lac))", re.I)
+
+
+def _bare_rupees(text):
+    """The largest plain rupee amount in the text, or None.
+
+    Floored at ten lakh so that four-digit years, head-counts and percentages
+    can never be read as money -- every threshold this corpus states is in
+    crores, and the floor is two orders of magnitude below the smallest.
+    """
+    best = None
+    for m in _BARE.finditer(text):
+        v = float(m.group(1).replace(",", ""))
+        if v >= 10**6 and (best is None or v > best):
+            best = v
+    return round(best) if best is not None else None
 
 
 # ---------------------------------------------------------------- dates

@@ -202,7 +202,8 @@ def _run_one(db, plan, q, medians, gr=None):
     if gr is not None:
         try:
             gp = generic.plan(db, gr, q["question"], q.get("answer_type"),
-                              plan.get("client"), plan.get("category"))
+                              plan.get("client"), plan.get("category"),
+                              estate=bool(plan.get("estate")))
             if gp:
                 got = gr.run(gp)
                 if got is not None:

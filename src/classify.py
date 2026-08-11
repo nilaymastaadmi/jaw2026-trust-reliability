@@ -181,24 +181,37 @@ class ClientIndex:
         def value(run):
             return sum(self.weight[t] for t in set(run))
 
-        best, run = [], []
+        def informative(run):
+            """A run carries information about WHICH client, not just which state."""
+            inf = [t for t in run if t not in _STATE_TOKENS]
+            if not inf:
+                return False
+            return len(set(run)) >= 2 or self.df.get(inf[0], 9) == 1
+
+        # Every run, not just the best-scoring one. A state token is unique to
+        # its client and therefore weighs 1.0, so the bare run `maharashtra`
+        # outscored `public works department` and became this client's only
+        # candidate span -- and being uninformative on its own, it was then
+        # rejected, dropping Public Works Department, Govt of Maharashtra out of
+        # the ranking entirely on a question that names it twice over. The
+        # mention we want is the strongest run that actually identifies a
+        # client; a bare state is still not one.
+        runs, run = [], []
         for t in qseq:
             if t in toks:
                 run.append(t)
             elif t in _STOP and run:
                 continue                       # "Jal Nigam ... in Gujarat"
             else:
-                if value(run) > value(best):
-                    best = run
+                if run:
+                    runs.append(run)
                 run = []
-        if value(run) > value(best):
-            best = run
-        informative = [t for t in best if t not in _STATE_TOKENS]
-        if not informative:
+        if run:
+            runs.append(run)
+        good = [r for r in runs if informative(r)]
+        if not good:
             return None
-        if len(set(best)) < 2 and self.df.get(informative[0], 9) != 1:
-            return None
-        return set(best)
+        return set(max(good, key=value))
 
     def score(self, question):
         """-> [(score, client)] sorted high to low, only clients with a hit."""
@@ -232,14 +245,51 @@ class ClientIndex:
         out.sort(key=lambda r: (-r[0], r[1]))
         return out
 
-    def resolve(self, question, tiebreak=None):
+    def mentioned(self, question):
+        """Is ANY client named here, even ambiguously?
+
+        Distinct from resolve(): a question that ties four Public Works
+        Departments mentions a client and must not be answered over the whole
+        estate, while one that names no client at all can only be estate-wide.
+        Refusing tells you nothing about which of the two you have; this does.
+        """
+        ranked = self._ranked(norm_text(question).split())
+        return bool(ranked) and ranked[0][0] >= 0.30
+
+    def _state_pick(self, winners, qseq):
+        """Among same-span siblings, the state the question names ELSEWHERE.
+
+        `_span` decides which FAMILY is mentioned, and it is right to: a mention
+        is contiguous. But the state that separates the siblings is very often
+        not inside the mention -- "Two of our clients are called Public Works
+        Department. I mean Maharashtra", "the Gujarat one, not Maharashtra".
+        The contiguous run is `public works department` for all four PWDs, so
+        the span rule ties them and refuses a question a reader answers at a
+        glance.
+
+        A state token that belongs to exactly ONE of the tied siblings settles
+        it. Tokens shared by two of them (`pradesh`, in Uttar and Madhya) carry
+        no information and are skipped, and two siblings each claiming a token
+        is still a refusal.
+        """
+        hits = {}
+        for t in qseq:
+            if t not in _STATE_TOKENS:
+                continue
+            owners = [w for w in winners if t in self.toks[w]]
+            if len(owners) == 1:
+                hits[owners[0]] = hits.get(owners[0], 0) + 1
+        return next(iter(hits)) if len(hits) == 1 else None
+
+    def resolve(self, question, tiebreak=None, state_tiebreak=False):
         """Best client, or None when the field is genuinely ambiguous.
 
         `tiebreak` is an optional predicate used only to separate exact ties --
         for a category-delta question the tied candidate that actually holds
         works in both named categories is the intended one (HV-IC-0464).
         """
-        ranked = self._ranked(norm_text(question).split())
+        ranked_seq = norm_text(question).split()
+        ranked = self._ranked(ranked_seq)
         if not ranked:
             return None
         best, _, best_span = ranked[0]
@@ -261,13 +311,22 @@ class ClientIndex:
                 keep = [n for n in winners if tiebreak(n)]
                 if len(keep) == 1:
                     return keep[0]
+            if state_tiebreak:
+                pick = self._state_pick(winners, ranked_seq)
+                if pick:
+                    return pick
             return None
         # A clear winner still has to beat the runner-up by a real margin.
         if len(ranked) > 1 and best - ranked[1][0] < 0.05:
+            close = winners + [ranked[1][1]]
             if tiebreak:
-                keep = [n for n in (winners + [ranked[1][1]]) if tiebreak(n)]
+                keep = [n for n in close if tiebreak(n)]
                 if len(keep) == 1:
                     return keep[0]
+            if state_tiebreak:
+                pick = self._state_pick(close, ranked_seq)
+                if pick:
+                    return pick
             return None
         return winners[0]
 
@@ -481,17 +540,66 @@ _OWED = (r"still owe[sd]?|still owing|remaining balance|outstanding|unpaid|still
          r"|invoiced\b[^.?]{0,25}\bsubtract\b[^.?]{0,25}\breceived")
 # Reference-letter vocabulary, as against payment-collection vocabulary.
 _REFERENCE = (r"reference letters?|client references?|referenc\w*|testimonials?|endorsements?"
-              r"|client approval|client sign-?off|formal verification|backed by a client")
+              r"|client approval|client sign-?off|backed by a client"
+              r"|formal(?:ly)?(?:\s+\w+){0,2}\s+verif\w*|client verif\w*|verified by (?:the|our)"
+              r"|written confirmation|letters? on file|attest\w*|vouch\w*|commendation")
+# Payment vocabulary, as against reference-letter vocabulary. A percent question
+# with no money word in it anywhere cannot be a collection ratio.
+_PAYMENT = (r"invoic\w*|bill\w*|collect\w*|receiv\w*|receipts?|paid|payment"
+            r"|\bcash\b|\bmoney\b|realis\w*|realiz\w*|recover\w*|outstanding"
+            r"|\bdue\b|settled|remitt\w*")
 _EXCLUDE = (r"excluding|except(?:\s+for)?|other than|apart from|but not|ignoring|leaving out"
             r"|taken out|take out|drop\b|dropping\b|strip(?:ping)? out|with[^.?]{0,20}removed"
             r"|not including|without counting|excl\.?|minus the|net of|stripped out"
             r"|strip(?:ping)? out|carve (?:that )?out|set aside|filter out|filter(?:ing)? out"
             r"|drop(?:ping)? the|remove the|once we remove|after (?:the )?\w+ (?:division|segment)"
-            r" is excluded|is excluded|exclude")
+            r" is excluded|is excluded|exclude|leave out|leave off|bar the|barring"
+            r"|less the|aside from|save for|discount(?:ing)? the|omit(?:ting)? the"
+            r"|everything but|all but the|skip(?:ping)? the|net off the")
+
+
+# The middle of a distribution, however the asker names it.
+_MEDIAN = (r"\bmedian\b|middle value|mid-?point|halfway value|midway value"
+           r"|middle of the (?:range|pack|list|spread)|50th percentile")
+
+# `mean` is a verb far more often than it is a statistic, and the questions that
+# use it as a verb are exactly the hard ones: "Two of our clients are called
+# Public Works Department -- I do NOT mean the Gujarat one. I mean Maharashtra."
+# Read as a statistic that routes a portfolio total to avg_work_size and loses
+# the whole question. Blank the verb uses first, then look for the noun.
+_VERB_MEAN = re.compile(
+    r"\b(?:i|we|you|they|he|she|it|that|this|which|who)\s+"
+    r"(?:do(?:es)?\s+not\s+|do(?:es)?n[\u2019']?t\s+|did\s+not\s+|didn[\u2019']?t\s+"
+    r"|really\s+|actually\s+|just\s+|probably\s+|certainly\s+)?means?\b", re.I)
 
 
 def _has(pat, q):
     return bool(re.search(pat, q, re.I))
+
+
+def _negated(term, q):
+    """Is every mention of `term` there only to rule it out?
+
+    "combined value of everything graded Good -- note that's Good specifically,
+    not very good and not satisfactory" names three gradings and asks for one.
+    The longest-first match takes Very Good and answers a different question.
+    """
+    neg = 0
+    hits = list(re.finditer(r"\b" + re.escape(term) + r"\b", q, re.I))
+    if not hits:
+        return False
+    for m in hits:
+        before = q[max(0, m.start() - 40):m.start()]
+        if re.search(r"\b(?:not|other than|rather than|excluding|except|besides"
+                     r"|apart from|never)\b[\s\w]{0,12}$", before, re.I):
+            neg += 1
+    return neg == len(hits)
+
+
+def _mean_asked(q):
+    """Is an arithmetic mean being asked for, as against the verb `to mean`?"""
+    return bool(re.search(r"\baverage\b|\bavg\b|\bmean\b",
+                          _VERB_MEAN.sub(" ", q), re.I))
 
 
 # ---------------------------------------------------------------- classifier
@@ -576,7 +684,13 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     # Steel Corporation and outscored the client HV-IC-0054 actually names
     # ("all completed trishakti work"). Retry unstripped if that finds nothing,
     # so a client whose own name overlaps the work title is not lost.
-    client = clidx.resolve(drop_negated_states(strip_work(q)), tiebreak=tiebreak)
+    # The state tie-break is offered only when NO work is named. Every work
+    # title carries a state ("WTP Augmentation - West Bengal Pkg-51"), so with a
+    # work in play a free-floating state token is more likely to be the work's
+    # than the client's -- and there the refusal is what lets the named work's
+    # own client take over two lines below, which is always right.
+    client = clidx.resolve(drop_negated_states(strip_work(q)), tiebreak=tiebreak,
+                           state_tiebreak=named_work is None)
     if not client and named_work and named_work.get("client"):
         # The named work's client, BEFORE any unstripped retry. Questions that
         # name only a work ("the Farhan Khan PMP on Highway Construction —
@@ -590,7 +704,8 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
         plan["work"] = named_work["work"]
         plan["client_via"] = "work"
     if not client:
-        client = clidx.resolve(drop_negated_states(q), tiebreak=tiebreak)
+        client = clidx.resolve(drop_negated_states(q), tiebreak=tiebreak,
+                               state_tiebreak=named_work is None)
     if not client and person:
         led = db.led_by(person)
         names = {w["client"] for w in led if w.get("client")}
@@ -623,6 +738,23 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     plan["client"] = client
     cats = cats_for(client)
 
+    # ESTATE SCOPE, derived rather than listed.
+    #
+    # All 23 shapes are scoped to one client. A question that names no client
+    # and no person is therefore unanswerable by every one of them -- and that
+    # is a fact about the question, not a phrase to look for. "How many
+    # completed works carry a stated grading of Excellent", "Expressways
+    # delivered as JV Partner, value across all clients", "across the whole
+    # record, how many works have no reference letter" all land here.
+    #
+    # The test is deliberately `mentioned`, not `resolved`: a question that
+    # names a client ambiguously (four Public Works Departments, no state) has
+    # a client, and answering it over the estate would be a confident wrong
+    # number where a refusal earns partial credit from the fallback ladder.
+    plan["estate"] = bool(not client and not person and not clidx.mentioned(q))
+    if plan["estate"] and len(cats) == 1:
+        plan["category"] = cats[0]
+
     # -- days: the whole class is one shape ---------------------------------
     if at == "days":
         plan["shape"] = "date_span"
@@ -635,7 +767,15 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
 
     # -- percent: reference share vs payment collection ---------------------
     if at == "percent":
-        plan["shape"] = "referenced_share" if _has(_REFERENCE, q) else "collection_pct"
+        # Only two shapes are possible, so the question is a collection ratio
+        # ONLY if it talks about money. "What proportion of the completed
+        # assignments carry formal client verification" is not a payment
+        # question however it is worded, and defaulting to collection_pct sent
+        # it to the receivables ledger for a confident wrong number.
+        if _has(_REFERENCE, q) or not _has(_PAYMENT, q):
+            plan["shape"] = "referenced_share"
+        else:
+            plan["shape"] = "collection_pct"
         if not client or weak_client:
             plan["confidence"] = 0.0 if not client else 0.5
         return plan
@@ -644,10 +784,22 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     if at == "count":
         if _has(r"lack(?:s|ing)?|without|missing|absent|un-?referenced"
                 r"|no\s+(?:\w+\s+){0,3}(?:reference|letter)|unable to support"
-                r"|not\s+(?:\w+\s+){0,3}(?:referenced|supported)", q):
+                r"|not\s+(?:\w+\s+){0,3}(?:referenced|supported)"
+                r"|un-?supported|un-?backed|un-?verified|un-?documented"
+                r"|nothing on file|never (?:got|received) a", q):
             plan["shape"] = "absence"
         else:
             plan["shape"] = "distinct_count"
+        if plan["estate"]:
+            # No client and no person: the question counts over the estate.
+            # `absence` already supports that scope; a distinct count over the
+            # whole book does not correspond to any shape, so leave it to the
+            # compositional query rather than returning a client-scoped zero.
+            if plan["shape"] == "absence":
+                plan["scope"] = "all"
+            else:
+                plan["shape"] = None
+            return plan
         if plan["shape"] == "distinct_count" and not person:
             plan["confidence"] = 0.0
         if plan["shape"] == "absence" and not client:
@@ -656,7 +808,7 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
 
     # -- money --------------------------------------------------------------
     # 1. mean vs median. Must precede avg_work_size, which also says "average".
-    if _has(r"\bmedian\b", q) and _has(r"\bmean\b|\baverage\b|\bavg\b", q):
+    if _has(_MEDIAN, q) and _mean_asked(q):
         plan["shape"] = "mean_median_gap"
         if not client or weak_client:
             plan["confidence"] = 0.0 if not client else 0.5
@@ -678,7 +830,7 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
             _has(r"\bled\b|\bdirected\b|\bheaded\b|works? (?:he|she) |completed|finished"
                  r"|brought to completion|delivered|wrapped up|closed out|completions"
                  r"|brought in|she brought|he brought", q) and \
-            not _has(r"average|\bmean\b|median|typical", q):
+            not (_mean_asked(q) or _has(_MEDIAN + r"|typical", q)):
         # temporal_chain is a SUM over a person's post-credential works. A
         # question asking for an average is avg_work_size or mean_median_gap --
         # and "since" often means "because" rather than "after" (HV-IC-0119).
@@ -691,12 +843,15 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     # vocabulary is read off the database so this keeps working if the corpus
     # records different roles.
     roles = [r for r in sorted(db.roles(), key=len, reverse=True)
-             if re.search(r"\b" + re.escape(r) + r"\b", q, re.I)]
+             if re.search(r"\b" + re.escape(r) + r"\b", q, re.I)
+             and not _negated(r, q)]
     if roles and _has(r"share|total|value|aggregate|sum|worth|portion|combined"
                       r"|how much|add up|deliver(?:ed)?|executed", q):
         plan["shape"] = "role_split"
         plan["role"] = roles[0]
-        if not client:
+        if plan["estate"]:
+            plan["scope"] = "all"
+        elif not client:
             plan["confidence"] = 0.0
         return plan
 
@@ -706,12 +861,15 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     # data are both here, so a hidden set that reinstates it is answerable
     # rather than a guaranteed miss.
     grades = [g for g in sorted(db.gradings(), key=len, reverse=True)
-              if re.search(r"\b" + re.escape(g) + r"\b", q, re.I)]
+              if re.search(r"\b" + re.escape(g) + r"\b", q, re.I)
+              and not _negated(g, q)]
     if grades and _has(r"grade[ds]?|grading|rated|rating|assessed|marked"
                        r"|quality as|recorded? the quality|performance as", q):
         plan["shape"] = "doc_filtered_aggregate"
         plan["grading"] = grades[0]
-        if not client:
+        if plan["estate"]:
+            plan["scope"] = "all"
+        elif not client:
             plan["confidence"] = 0.0
         return plan
 
@@ -737,15 +895,28 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     #    and threshold_aggregate: HV-IC-0127 says "outstanding contract value we
     #    still need to secure ... to clear the 120 Cr credential threshold",
     #    which reads as a balance but is a shortfall against a bar.
-    if _has(r"how much (?:more|additional|further)|additional work|must we (?:secure|win)"
-            r"|need to (?:bring in|secure|win|land)|to reach|to hit the|to hit\b|to clear the"
-            r"|shortfall to|shortfall against|how far short|how far off|still need to secure"
-            r"|more value do we need|remaining distance|distance to a|deficit"
-            r"|still have to land|gap to a|gap against|short of the"
-            r"|gap we would have to close|gap we have to close|fall short|falls short"
-            r"|asks for [^.?]{0,30}of completed work|pre-?qualification asks", q):
+    # A phrase that names a BAR the portfolio is being measured against.
+    _to_a_bar = _has(
+        r"how much (?:more|additional|further)|additional work|must we (?:secure|win)"
+        r"|need to (?:bring in|secure|win|land)|to reach|to hit the|to hit\b|to clear the"
+        r"|how far short|how far off|still need to secure"
+        r"|more value do we need|remaining distance|distance to a|deficit"
+        r"|still have to land|gap to a|gap against|short of the"
+        r"|gap we would have to close|gap we have to close|fall short|falls short"
+        r"|asks for [^.?]{0,30}of completed work|pre-?qualification asks", q)
+    # `shortfall` on its own is ambiguous and both readings are live in the set.
+    # "the shortfall between the approved contract totals and the amounts we've
+    # actually billed" (HV-IC-0043) is an unbilled gap; "against a credential
+    # bar of INR 200 Cr, what is the shortfall" is a gap to a threshold. What
+    # separates them is whether a rupee bar is stated at all -- a shortfall with
+    # no bar in sight is a shortfall between two things the corpus holds.
+    thr_here = mine_threshold(q)
+    if _has(r"shortfall\b|short by|falls? below the", q) and thr_here is not None \
+            and not (_has(_AWARDED, q) and _has(_BILLED, q)):
+        _to_a_bar = True
+    if _to_a_bar:
         plan["shape"] = "gap_to_threshold"
-        plan["threshold"] = mine_threshold(q)
+        plan["threshold"] = thr_here
         if not client or plan["threshold"] is None:
             plan["confidence"] = 0.0
         return plan
@@ -796,9 +967,12 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
         if not client:
             plan["confidence"] = 0.0
         return plan
-    if _has(r"\btotal\b|\bhow much\b|\baggregate\b|\bsum\b|\bgross\b", q) and \
-            _has(r"received|collected|receipts|paid us|paid to us|cleared"
-                 r"|money has come in|cash .{0,20}paid", q) and not _has(_OWED, q):
+    if (_has(r"\btotal\b|\bhow much\b|\baggregate\b|\bsum\b|\bgross\b", q) or
+            _has(r"cash in from|cash collected|money in from|what came in from"
+                 r"|receipts from|collections? from|has come in from", q)) and \
+            _has(r"received|collected|receipts|paid us|paid to us|cleared|cash in"
+                 r"|money has come in|has come in|cash .{0,20}paid|came in", q) and \
+            not _has(_OWED, q):
         plan["shape"] = "received_total"
         if not client:
             plan["confidence"] = 0.0
@@ -839,9 +1013,10 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     # a credential date ("PMP issued March 10, 2021") cannot be read as the year
     # being asked about -- those questions name a person and say "led ... after".
     if len(years) == 1 and not person and \
-            _has(r"completed work|work completed|completed value|delivered|completion"
-                 r"|value of work|hand(?:ed)? over|handover|close[d]? out|finished"
-                 r"|deliver(?:y|ed)|total(?:led)?|figure|\bcomplete\b|did we do", q):
+            _has(r"complet\w*|deliver\w*|finish\w*|hand(?:ed)? over|handover"
+                 r"|close[d]? out|value of work|total(?:led)?|figure|did we do"
+                 r"|\b(?:in|during|for|throughout|over|across)\s+(?:the\s+)?"
+                 r"(?:calendar\s+|financial\s+|fiscal\s+)?(?:year\s+)?(?:19|20)\d{2}", q):
         plan["shape"] = "year_total"
         plan["years"] = years
         if not client:
@@ -849,7 +1024,7 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
         return plan
 
     # 11. average work size across the client's portfolio.
-    if _has(r"average|mean|typical", q):
+    if _mean_asked(q) or _has(r"\btypical\b", q):
         plan["shape"] = "avg_work_size"
         if not client or weak_client:
             plan["confidence"] = 0.0 if not client else 0.5
