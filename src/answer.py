@@ -121,9 +121,15 @@ def answer_all(questions, use_llm=False, verbose=True):
     rows = []
     for q in questions:
         plan = classify.plan_for(db, q["question"], q.get("answer_type"), catidx, clidx)
-        if plan["confidence"] < 1.0:
+        # Fall back to the old rule ladder only when the classifier produces NO
+        # number. A low-confidence classifier plan is still a considered one;
+        # the ladder's "confidence" says a pattern matched, not that it matched
+        # the right thing -- it was fully confident on all 60 questions it
+        # dumped into client_total. Substituting it for a usable answer trades
+        # a reasoned guess for a worse one.
+        if executor.run(db, plan) is None:
             alt = router.route(db, q["question"], q.get("answer_type"))
-            if alt["confidence"] >= 1.0 and executor.run(db, alt) is not None:
+            if executor.run(db, alt) is not None:
                 plan = alt
         # LLM output only overrides where the deterministic router is unsure
         if q["qid"] in llm_plans and plan["confidence"] < 1.0:

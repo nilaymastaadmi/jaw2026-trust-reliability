@@ -178,8 +178,21 @@ class ClientIndex:
             # the question actually names and forcing a refusal.
             got = sum(self.weight[t] for t in span)
             tot = sum(self.weight[t] for t in self.toks[n])
-            out.append((got / tot, n))
-        out.sort(reverse=True)
+            out.append((got / tot, n, frozenset(span)))
+        out.sort(key=lambda r: (-r[0], r[1]))
+        return [(s, n) for s, n, _ in out]
+
+    def _ranked(self, qseq):
+        """score() plus the matched span, which resolve() needs to spot ties."""
+        out = []
+        for n in self.names:
+            span = self._span(n, qseq)
+            if not span:
+                continue
+            got = sum(self.weight[t] for t in span)
+            tot = sum(self.weight[t] for t in self.toks[n])
+            out.append((got / tot, n, frozenset(span)))
+        out.sort(key=lambda r: (-r[0], r[1]))
         return out
 
     def resolve(self, question, tiebreak=None):
@@ -189,13 +202,23 @@ class ClientIndex:
         for a category-delta question the tied candidate that actually holds
         works in both named categories is the intended one (HV-IC-0464).
         """
-        ranked = self.score(question)
+        ranked = self._ranked(norm_text(question).split())
         if not ranked:
             return None
-        best = ranked[0][0]
+        best, _, best_span = ranked[0]
         if best < 0.30:                       # no real mention, just stray words
             return None
-        winners = [n for s, n in ranked if abs(s - best) < 1e-9]
+
+        # Candidates matched on exactly the SAME words are indistinguishable to
+        # this question, whatever the arithmetic says. "the Public Works
+        # Department account" names no state, so all four PWDs match on
+        # {public, works, department} -- yet the score divides by the client's
+        # full name weight, so whichever sibling carries the least distinctive
+        # state token wins outright. That handed HV-IC-0464 to PWD Gujarat, a
+        # client with no Roads Highways work at all, at full confidence.
+        # Identical spans are a tie by construction; break it on evidence or
+        # refuse.
+        winners = [n for s, n, sp in ranked if sp == best_span]
         if len(winners) > 1:
             if tiebreak:
                 keep = [n for n in winners if tiebreak(n)]
@@ -507,14 +530,21 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     # Steel Corporation and outscored the client HV-IC-0054 actually names
     # ("all completed trishakti work"). Retry unstripped if that finds nothing,
     # so a client whose own name overlaps the work title is not lost.
-    client = clidx.resolve(strip_work(q), tiebreak=tiebreak) or \
-        clidx.resolve(q, tiebreak=tiebreak)
+    client = clidx.resolve(strip_work(q), tiebreak=tiebreak)
+    if not client and named_work and named_work.get("client"):
+        # The named work's client, BEFORE any unstripped retry. Questions that
+        # name only a work ("the Farhan Khan PMP on Highway Construction —
+        # Rajasthan Pkg-77") have no client to find once the title is removed,
+        # and retrying on the raw text just re-reads the title as a client:
+        # `construction` belongs to exactly one client name, so Highway
+        # CONSTRUCTION resolved to Lakshya Engineering & Construction and
+        # STEEL Truss Bridge to Mahanadi Steel Corporation, both at full
+        # confidence and both wrong.
+        client = named_work["client"]
+        plan["work"] = named_work["work"]
+        plan["client_via"] = "work"
     if not client:
-        w = named_work
-        if w and w.get("client"):
-            client = w["client"]
-            plan["work"] = w["work"]
-            plan["client_via"] = "work"
+        client = clidx.resolve(q, tiebreak=tiebreak)
     if not client and person:
         led = db.led_by(person)
         names = {w["client"] for w in led if w.get("client")}
@@ -531,7 +561,17 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
             def pkg(w):
                 m = re.search(r"Pkg[\s\-_]*(\d{1,3})", w.get("work") or "", re.I)
                 return int(m.group(1)) if m else 999
-            client = sorted(led, key=pkg)[0]["client"]
+            # "his client" -- the one this person is most associated with, i.e.
+            # where they led the most works. That is also the highest-
+            # probability answer: the generator picked a work and the client
+            # followed, so a client holding 2 of the person's 5 works is twice
+            # as likely as one holding 1. Ties fall back to the lowest package
+            # number so the choice stays deterministic.
+            counts = {}
+            for w in led:
+                if w.get("client"):
+                    counts[w["client"]] = counts.get(w["client"], 0) + 1
+            client = sorted(led, key=lambda w: (-counts.get(w["client"], 0), pkg(w)))[0]["client"]
             plan["client_via"] = "person-first-work"
             weak_client = True
     plan["client"] = client

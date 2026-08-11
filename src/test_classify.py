@@ -108,6 +108,35 @@ def main():
             print(f"  FAIL {qid} {shape} produced no number")
     print(f"  {len(questions) - len(blanks)}/{len(questions)} answered")
 
+    print("--- resolved client agrees with the named package ---")
+    # The sharpest check available without golds. When a question names a
+    # package number, that package's client is the client the question is
+    # about, so any disagreement is a silent wrong answer. It caught three:
+    # "Highway CONSTRUCTION — Rajasthan Pkg-77" resolving to Lakshya
+    # Engineering & CONSTRUCTION, and "STEEL Truss Bridge — Gujarat Pkg-112" to
+    # Mahanadi STEEL Corporation, both at full confidence.
+    #
+    # HV-IC-0130 is the one legitimate exception: it names a package and then
+    # asks about a DIFFERENT client outright ("on your pkg-104 highway pmp,
+    # what's the combined value of all completed subarnarekha work?").
+    allowed_mismatch = {"HV-IC-0130"}
+    mismatches = 0
+    for q in questions:
+        plan = classify.plan_for(db, q["question"], q.get("answer_type"), cats, clients)
+        client = plan.get("client")
+        pkgs = [int(m.group(1)) for m in
+                __import__("re").finditer(r"pkg[\s\-_]*(\d{1,3})", q["question"], 2)]
+        if not pkgs or not client or q["qid"] in allowed_mismatch:
+            continue
+        work = db._by_pkg.get(pkgs[0])
+        if work and work.get("client") != client:
+            mismatches += 1
+            fail += 1
+            print(f"  FAIL {q['qid']} pkg-{pkgs[0]} is {work['client']!r}"
+                  f" but plan used {client!r}")
+    if not mismatches:
+        print("  no package/client disagreements")
+
     print("--- family census ---")
     for shape in sorted(set(census) | set(CENSUS)):
         want, got = CENSUS.get(shape, 0), census.get(shape, 0)
