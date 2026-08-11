@@ -2,16 +2,18 @@
 
 The first set has been measured against four times and fixed against three, so it is
 no longer held out and its score is optimistic. This second set exists to give one
-unbiased number. Two rules make that work:
+unbiased number, and to find the questions we cannot answer *at all*.
+
+Two rules make that work:
 
 - Give the generating session **no sight of our repo, and no sight of the first set**.
   If it is the same session that produced the first one, start a **fresh** session.
 - When it comes back, we run it **once**, cold, and change nothing on the basis of it.
 
-The important change from the first prompt: it no longer hands over a closed list of
-question types. A list of the things we already handle can only measure how well we
-handle them. Half of this set is deliberately left to the generator to invent from the
-corpus, and every question is tagged so the two halves can be scored separately.
+The important change: it no longer hands over a closed list of question types. A list
+of the things we already handle can only measure how well we handle them. Half of this
+set is left to the generator to build from parts of the corpus our harness has never
+touched, and every question is tagged so the two halves score separately.
 
 Paste everything below the line.
 
@@ -30,31 +32,16 @@ pip install pymupdf openpyxl
 ```
 
 687 documents about **National Infrastructure Corp. Ltd.**, a synthetic Indian
-infrastructure contractor: 155 completed works (2010–2025), 486 employees on record,
+infrastructure contractor: 155 completed works (2010–2025), 486 employees on rolls,
 6 business units. Read `dataset/README.md`, `dataset/BRIEFING.md`, and the 21 worked
 examples in `dataset/sample_questions.json`.
 
-**The whole estate is in scope.** Counts by type:
-
-| Type | N | | Type | N |
-|---|---|---|---|---|
-| `completion_certificate` | 155 | | `compliance_matrix` | 40 |
-| `company_completion_certificate` | 155 | | `general_ledger_book` | 8 |
-| `reference_letter` | 132 | | `bank_statement` | 8 |
-| `performance_bond` | 60 | | `financial_statement` | 7 |
-| `personnel_certificate` | 48 | | `tender_dossier` | 6 |
-| `cv` | 39 | | `ra_bill` / `final_ra_bill` | 12 |
-| `iso_certificate` | 5 | | `annual_report` | 2 |
-| `past_performance_portfolio` | 1 | | workbooks (`.xlsx`) | 9 |
-
-The workbooks hold receivables ageing, a plant and machinery register, a trial balance
-by year, and BOQ/measurement detail.
-
 Three extraction warnings:
 - Use **PyMuPDF**. Some PDF libraries silently return field *labels* and drop field
-  *values* on these table-heavy certificates, raising no error.
+  *values* on these table-heavy documents, raising no error.
 - Dates are **day-first**: `06/02/2011` is 6 February.
-- `INR 33.38 Cr`, `3,338.00 Lakh` and `33,38,00,000` are the same number.
+- `INR 33.38 Cr`, `3,338.00 Lakh` and `33,38,00,000` are the same number. Financial
+  statements are stated **in lakhs**.
 
 ## Output
 
@@ -74,13 +61,14 @@ Three extraction warnings:
 ```
 
 `answer_type` ∈ `money` (rupees, plain integer) · `count` · `percent` (out of 100, two
-decimals) · `days`. `derivation` is **required** — name the works, values or documents
+decimals) · `days`. `derivation` is **required** — name the documents, rows or values
 used, so a disagreement can be settled against the corpus. `family` is `"listed"` or
 `"invented"`, per the two sections below.
 
 ## Section A — 150 questions, `"family": "listed"`
 
-Roughly 7 each. These make the set comparable to an earlier one.
+Roughly 7 each, over the completion certificates, reference letters, personnel
+certificates and the receivables workbook.
 
 1. Total value delivered for one client
 2. Client total **excluding** one category of work
@@ -110,38 +98,77 @@ Roughly 7 each. These make the set comparable to an earlier one.
 
 ## Section B — 150 questions, `"family": "invented"`
 
-**This is the more important half. Do not reuse Section A's topics.**
+**This is the more important half.** Section A covers two data sources. The estate has
+far more, and a prequalification panel would ask about all of it. Spread these roughly
+evenly over the twelve areas below, then invent beyond them.
 
-Go through the corpus and ask what else a bid desk, an auditor, or a prequalification
-panel would legitimately want a number for. Deliberately cover the document types
-Section A never touches — performance bonds, compliance matrices, ISO certificates,
-tender dossiers, RA bills, bank statements, financial statements, ledgers, annual
-reports, the plant and machinery register, the trial balance, and BOQ detail.
+**1. Performance bonds — 60 documents.** Each carries a bond number, issue date, the
+issuing bank, a tender reference, the work description, and a guarantee struck as a
+percentage of contract value. Ask about total guaranteed exposure, bonds by bank or by
+year, the guarantee percentage, counts.
 
-Some directions, to start you off rather than to limit you:
+**2. Compliance matrices — 40 documents.** Each is a tender checklist: numbered
+requirements, a Complied/Not status, evidence references, a minimum turnover
+requirement, a minimum staff count, an owned-asset count, an EMD reference. Ask about
+requirements met, thresholds quoted, counts across tenders.
 
-- **Bonds and guarantees** — value outstanding, bonds against one client, expiry
-  spans, guarantee as a proportion of contract value
-- **Plant and machinery** — gross block, count by type or location, value of what is
-  owned versus hired, how much is safety-certified, average age
-- **Accounts** — a line item in a given year's trial balance, movement between years,
-  a figure from a financial statement, ledger totals, receipts in a bank statement
-- **Tendering** — number of bids submitted, their aggregate value, compliance-matrix
-  pass rates
-- **Accreditation** — ISO certificates held, their validity spans
-- **Workforce** — headcount, credentials held across staff, how many hold more than
-  one, designation mix
-- **Portfolio shapes nobody asked for yet** — counts rather than sums (how many works
-  above a value, how many clients, how many works in a year); the whole estate rather
-  than one client; a category across all clients; the *smallest* rather than the
-  largest; a span between two completion dates; a duration of one work start to finish
-- **Cross-cutting** — combine two constraints, or two data sources: a category *and* a
-  year, a role *and* a threshold, works in one state, plant at one location against
-  works in that state
+**3. ISO certificates — 5 documents.** Certificate number, standard (9001 / 14001 /
+45001), initial certification date, valid-until date, and a schedule of audits with
+major/minor non-conformity counts and lead auditors. Ask about validity spans in days,
+NCs across audits, counts.
 
-Invent freely beyond these. If a number is readable from the documents and a
-reasonable person might ask for it, it belongs in Section B — **especially if it feels
-unlike anything in Section A.** Some of these are expected to be unanswerable by the
+**4. Tender dossiers — 6 documents.** RFP reference, bid value, submission date,
+earnest money, relevant-works count, and a **business unit table with head-counts**.
+Ask about aggregate bid value, bids per year, head-count by unit, EMD.
+
+**5. Financial statements — 7 documents.** Full profit-and-loss extracts **in lakhs**,
+with a previous-year comparative: contract revenue, other operating revenue, cost of
+materials, sub-contracting and labour, employee benefits, depreciation, other
+expenses, total expenses, profit before and after tax. Ask about a line in a given
+year, year-on-year movement, margins as a percentage.
+
+**6. Trial balance — 7 years in a workbook.** Per-account debit, credit and balance,
+including contract revenue split by work category. Ask about an account balance in a
+year, movement between years, revenue by category.
+
+**7. Plant and machinery register — 211 items in a workbook.** Each has a type, make,
+acquisition year, cost, condition, location, ownership (owned or hired) and a
+safety-certification flag. Ask about gross block, value or count by type, location or
+ownership, how much is safety-certified, average acquisition age.
+
+**8. RA bills — 12 documents.** Running-account bills with BOQ line items (unit, rate,
+quantity, amount), value of work done, GST at 18%, retention at 5%, net claimed, and a
+cumulative position. Ask about a bill's value, tax or retention, a line item, the
+cumulative figure.
+
+**9. BOQ workbooks — 6 contracts.** Bill-of-quantity totals and measured totals with
+per-item quantities and rates. Ask about a contract's BOQ total, an item's amount, the
+gap between billed and measured.
+
+**10. Bank statements and general ledgers — 16 documents.** Dated transactions with
+withdrawals, deposits and running balances; ledger accounts with debits, credits and
+balances. Ask about a closing balance, deposits in a year, an account's total.
+
+**11. Annual reports — 2 documents.** Board composition, financial highlights,
+registers. Ask about counts and headline figures.
+
+**12. Portfolio shapes nobody has asked for yet.** Still the completed works, but cut
+differently: **counts** rather than sums (how many works above a value, how many in a
+year, how many clients, how many categories); the **whole estate** rather than one
+client; one category across **all** clients; the **smallest** rather than the largest;
+the median on its own; works in one **state** (every work title names one); a person's
+**entire** delivered value rather than the post-credential part; how many works one
+person led; the span in days between two works' completion dates; the earliest or
+latest completion; a percentage share of something other than reference letters.
+
+**Cross-cutting — about 25 of the 150.** Combine two constraints or two sources: a
+category *and* a year; a role *and* a threshold; plant at one location against works in
+that state; bonds against the contract values they secure; invoiced against work done
+on RA bills.
+
+Invent freely beyond all of this. If a number is readable from the documents and a
+reasonable person might ask for it, it belongs here — **especially if it feels unlike
+anything in Section A.** Several of these are expected to be unanswerable by the
 system under test; that is exactly what the section is for.
 
 ## Difficulty and register (both sections)
@@ -160,8 +187,8 @@ false start or self-correction; an email from a non-technical colleague who desc
 things imprecisely; a bare one-liner; and a long paragraph where the question arrives
 at the end.
 
-**Spread across entities.** Use as many different clients, people, categories and
-years as the corpus allows. Do not lean on the same handful.
+**Spread across entities.** Use as many different clients, people, categories, years,
+locations and document instances as the corpus allows. Do not lean on a handful.
 
 ## Rules
 
@@ -170,6 +197,8 @@ years as the corpus allows. Do not lean on the same handful.
   no question, because it sends the other side chasing a bug that does not exist.
 - Every question must have exactly **one defensible answer**. If you cannot pin one,
   drop it.
+- Watch the units. Financial statements are in lakhs; certificates use crore, lakh and
+  Indian digit grouping interchangeably. State answers in **rupees**.
 - Do not include the same question twice in different words.
 
 ## One extra section
