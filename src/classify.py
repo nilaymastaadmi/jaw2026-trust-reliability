@@ -480,7 +480,7 @@ _OWED = (r"still owe[sd]?|still owing|remaining balance|outstanding|unpaid|still
          r"|unrecovered|exposure|owed to us|subtract everything received"
          r"|invoiced\b[^.?]{0,25}\bsubtract\b[^.?]{0,25}\breceived")
 # Reference-letter vocabulary, as against payment-collection vocabulary.
-_REFERENCE = (r"reference letters?|client references?|reference\b|testimonials?|endorsements?"
+_REFERENCE = (r"reference letters?|client references?|referenc\w*|testimonials?|endorsements?"
               r"|client approval|client sign-?off|formal verification|backed by a client")
 _EXCLUDE = (r"excluding|except(?:\s+for)?|other than|apart from|but not|ignoring|leaving out"
             r"|taken out|take out|drop\b|dropping\b|strip(?:ping)? out|with[^.?]{0,20}removed"
@@ -643,7 +643,7 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     # -- count: absence vs distinct categories ------------------------------
     if at == "count":
         if _has(r"lack(?:s|ing)?|without|missing|absent|un-?referenced"
-                r"|no\s+(?:\w+\s+){0,3}reference|unable to support"
+                r"|no\s+(?:\w+\s+){0,3}(?:reference|letter)|unable to support"
                 r"|not\s+(?:\w+\s+){0,3}(?:referenced|supported)", q):
             plan["shape"] = "absence"
         else:
@@ -674,9 +674,10 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     # 3. works a person led that finished after their credential date. Shares
     #    "combined value" wording with hop_aggregate; "after" is the separator.
     if person and _has(r"\bafter\b|\bsince\b|\bpost[-\s]|subsequent to|following\b"
-                       r"|once .{0,20}(?:issued|certified)|afterwards", q) and \
+                       r"|once .{0,20}(?:issued|certified)|afterwards|onwards?\b", q) and \
             _has(r"\bled\b|\bdirected\b|\bheaded\b|works? (?:he|she) |completed|finished"
-                 r"|brought to completion|delivered|wrapped up|closed out|completions", q) and \
+                 r"|brought to completion|delivered|wrapped up|closed out|completions"
+                 r"|brought in|she brought|he brought", q) and \
             not _has(r"average|\bmean\b|median|typical", q):
         # temporal_chain is a SUM over a person's post-credential works. A
         # question asking for an average is avg_work_size or mean_median_gap --
@@ -740,7 +741,9 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
             r"|need to (?:bring in|secure|win|land)|to reach|to hit the|to hit\b|to clear the"
             r"|shortfall to|shortfall against|how far short|how far off|still need to secure"
             r"|more value do we need|remaining distance|distance to a|deficit"
-            r"|still have to land|gap to a|gap against|short of the", q):
+            r"|still have to land|gap to a|gap against|short of the"
+            r"|gap we would have to close|gap we have to close|fall short|falls short"
+            r"|asks for [^.?]{0,30}of completed work|pre-?qualification asks", q):
         plan["shape"] = "gap_to_threshold"
         plan["threshold"] = mine_threshold(q)
         if not client or plan["threshold"] is None:
@@ -785,7 +788,8 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
 
     # 7c. one side of the ledger on its own, with nothing to subtract it from.
     # Reached only when no gap wording fired above.
-    if _has(r"\btotal\b|\bhow much\b|\baggregate\b|\bsum\b|\bgross\b", q) and \
+    if _has(r"\btotal\b|\bhow much\b|\baggregate\b|\bsum\b|\bgross\b"
+            r"|what was actually invoiced|actually invoiced|ageing register", q) and \
             _has(r"invoiced|billed|invoices raised|raised on|invoices", q) and \
             not _has(_OWED, q):
         plan["shape"] = "invoiced_total"
@@ -837,7 +841,7 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     if len(years) == 1 and not person and \
             _has(r"completed work|work completed|completed value|delivered|completion"
                  r"|value of work|hand(?:ed)? over|handover|close[d]? out|finished"
-                 r"|deliver(?:y|ed)|total(?:led)?|figure", q):
+                 r"|deliver(?:y|ed)|total(?:led)?|figure|\bcomplete\b|did we do", q):
         plan["shape"] = "year_total"
         plan["years"] = years
         if not client:

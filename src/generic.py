@@ -77,6 +77,17 @@ def _first(pairs, text):
 # nothing at all -- never where something already answers.
 _NO_SHAPE = {"asset", "boq_item"}
 
+# Works are covered by 23 shapes -- but every one of them is scoped to a single
+# client. A question about the WHOLE estate ("across the completed-works record,
+# how many have no reference letter", "combined value of everything graded
+# Good", "our total as JV Partner") has no client to resolve, so no shape can
+# run and the ladder can only guess. That is a no-shape case too, and the only
+# one where letting the graph answer for `work` is not competing with anything.
+_ESTATE = (r"across (?:the|our|all)|whole (?:completed|estate|record|portfolio|book)"
+           r"|entire (?:completed|estate|record|portfolio|book)|every completed work"
+           r"|all (?:our |of our )?(?:completed )?works|company-?wide|in total across"
+           r"|overall(?: total)?|forget one client|any client|all clients")
+
 
 def plan(db, gr, question, answer_type=None, client=None, category=None):
     """-> {entity, filters, fn, field} or None when the question is not placeable."""
@@ -84,7 +95,9 @@ def plan(db, gr, question, answer_type=None, client=None, category=None):
     at = (answer_type or "").lower()
 
     entity = _first(_ENTITY, q)
-    if entity not in _NO_SHAPE:
+    if entity == "work" and client is None and re.search(_ESTATE, q, re.I):
+        pass                                   # estate-wide: no shape can run
+    elif entity not in _NO_SHAPE:
         # Either the question is about something a shape already covers, or the
         # entity was not named at all. Both are better served by the ladder.
         return None
@@ -149,6 +162,10 @@ def plan(db, gr, question, answer_type=None, client=None, category=None):
             field = "acquired"
 
     if entity == "work":
+        for g in ("Very Good", "Excellent", "Satisfactory", "Good"):
+            if re.search(r"\b" + g + r"\b", q, re.I):
+                filters.append(("grading", "eq", g))
+                break
         for st in _STATES:
             if re.search(r"\b" + re.escape(st) + r"\b", q, re.I):
                 filters.append(("state", "eq", st))
