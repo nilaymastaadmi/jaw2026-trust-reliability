@@ -453,7 +453,9 @@ def mine_person(db, q):
     fallback ladder a corpus-typical guess.
     """
     ql = q.lower()
-    hits = [n for n in db.persons if n.lower() in ql]
+    # "suresh desai, not suresh das and not suresh chopra" names three people
+    # and asks about one. Taking the longest mention answers for Suresh Chopra.
+    hits = [n for n in db.persons if n.lower() in ql and not _negated(n, q)]
     if hits:
         return max(hits, key=len)
     for part in (0, -1):                       # first name, then surname
@@ -595,7 +597,18 @@ def resolve_work(db, q, person=None, cutoff=0.75):
     # Pkg-58" to "Irrigation & Waterways Dept, Govt of Rajasthan; excluding
     # water treatment" (HV-IC-0002) and strips the category the question is
     # built on.
-    if not mine_credential(q):
+    # The gate. A loose work reference is only looked for where the question
+    # plainly refers to one: a credential ("Meera Roy's March 10th PMP for the
+    # Jharkhand hydro tunnel package"), a person who RAN something, or a
+    # question that names a job and then asks about "that client". Without a
+    # gate the scorer matches "Water Treatment Plant -- Rajasthan Pkg-58" to
+    # "Irrigation & Waterways Dept, Govt of Rajasthan; excluding water
+    # treatment" and strips the category the question is built on.
+    if not (mine_credential(q)
+            or (person and _has(r"\bran\b|\bled\b|\bheaded\b|\bdelivered\b|\bhandled\b"
+                                r"|\bmanaged\b|\bworked on\b|\bsigned off\b", q))
+            or _has(r"that (?:same )?client|the client behind|whose client|their client"
+                    r"|the client on (?:that|it)|client for (?:that|it)|for that account", q)):
         return None
     # A work named without its package number -- "Rahul Menon's PMP for the
     # Highway Tunnel". Two of the title's three content words are present, which
@@ -642,7 +655,9 @@ def resolve_work(db, q, person=None, cutoff=0.75):
 # Awarded side of a two-operand gap: what the client committed to us.
 _AWARDED = (r"award(?:ed|s)?|sanction(?:ed)?|secured|contract value|contract totals"
             r"|contract roll|committed|commitments|assigned|handed over|total scope"
-            r"|total value|total project value|approved contract|full value")
+            r"|total value|total project value|approved contract|full value"
+            r"|value of (?:the |our |all )?complet\w+ works?|complet\w+[- ]works? value"
+            r"|value (?:we[' ]?(?:ve)? )?(?:delivered|completed)|delivered value")
 # Billed side of the same gap: what we put on an invoice.
 _BILLED = (r"billed|bill so far|invoice[ds]?|invoicing|submitted claims|claims we submitted"
            r"|formally claimed|successfully claimed|our bills|submitted claim|claimed"
@@ -671,6 +686,8 @@ _EXCLUDE = (r"excluding|except(?:\s+for)?|other than|apart from|but not|ignoring
             r"|taken out|take out|drop\b|dropping\b|strip(?:ping)? out|with[^.?]{0,20}removed"
             r"|not including|without counting|excl\.?|minus the|net of|stripped out"
             r"|leav(?:e|ing) aside|set(?:ting)? aside|put(?:ting)? aside|hold(?:ing)? back"
+            r"|leav(?:e|ing)[^.?]{0,28}\bout\b|keep(?:ing)?[^.?]{0,28}\bout of\b"
+            r"|take[^.?]{0,20}\bout\b|taken? out|pull(?:ing)?[^.?]{0,20}\bout\b"
             r"|strip(?:ping)? out|carve (?:that )?out|set aside|filter out|filter(?:ing)? out"
             r"|drop(?:ping)? the|remove the|once we remove|after (?:the )?\w+ (?:division|segment)"
             r" is excluded|is excluded|exclude|leave out|leave off|bar the|barring"
@@ -679,8 +696,9 @@ _EXCLUDE = (r"excluding|except(?:\s+for)?|other than|apart from|but not|ignoring
 
 
 # The middle of a distribution, however the asker names it.
-_MEDIAN = (r"\bmedian\b|middle value|mid-?point|halfway value|midway value"
-           r"|middle of the (?:range|pack|list|spread)|50th percentile")
+_MEDIAN = (r"\bmedian\b|middle(?:\s+\w+){0,2}\s+value|mid-?point|halfway value"
+           r"|midway value|middle of the (?:range|pack|list|spread)|50th percentile"
+           r"|middle (?:one|entry|figure|number)")
 
 # `mean` is a verb far more often than it is a statistic, and the questions that
 # use it as a verb are exactly the hard ones: "Two of our clients are called
@@ -710,7 +728,14 @@ _ESTATE = (r"across (?:all|every|the whole|the entire|our)\b|all clients|every c
            r"|our clients\b|all our clients|the clients\b|clients\b[^.?]{0,20}\bgraded"
            r"|only the works\b|the works (?:where|whose|that|which)\b"
            r"|works? where the certificate|irrespective of|\bin aggregate\b"
-           r"|of (?:our |the )?155\b|nationally\b|group total|book total|total book")
+           r"|of (?:our |the )?155\b|nationally\b|group total|book total|total book"
+           # A category scoped over the whole book: "of our roads maintenance
+           # jobs, how many have no reference letter", "looking only at the
+           # bridges and flyovers category". Named-category wording, which a
+           # mis-parsed client mention cannot produce.
+           r"|looking only at the|only at the\b|restrict(?:ing)? (?:this |it )?to the"
+           r"|(?:of|in|across|among|within) (?:our|the|all) [\w\s&]{0,28}"
+           r"(?:categor(?:y|ies)|jobs|works|projects|packages|assignments|scope)\b")
 
 
 # ------------------------------------------------------- answer_type recovery
@@ -815,7 +840,8 @@ def _contrasted(q, pat_a, pat_b, conn):
 
 def _mean_asked(q):
     """Is an arithmetic mean being asked for, as against the verb `to mean`?"""
-    return bool(re.search(r"\baverage\b|\bavg\b|\bmean\b",
+    return bool(re.search(r"\baverag\w*|\bavg\b|\bmean\b|per[- ]work value"
+                          r"|\bper work\b|apiece\b",
                           _VERB_MEAN.sub(" ", q), re.I))
 
 
@@ -906,11 +932,18 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
         if not marks:
             return names[0]
         pos = dict((c, p) for p, c in catidx.mine_pos(text, want=2))
-        after = [(min(p - m for m in marks if m <= p), c)
-                 for c, p in pos.items() if any(m <= p for m in marks)]
-        if after:
-            return min(after)[1]
-        return min((abs(p - marks[0]), c) for c, p in pos.items())[1]
+        # A category the question explicitly KEEPS is not the one being
+        # excluded, however close it sits to the marker: "I want the total with
+        # large bridges taken out. Bridges Flyovers is a separate line and
+        # stays in."
+        kept = {c for c, p in pos.items()
+                if re.search(r"^[^.?]{0,60}?(?:stays? in|remains? in|is kept|are kept"
+                             r"|still counts?|separate line|does(?: not|n't) come out"
+                             r"|is not excluded)", text[p:], re.I)}
+        live = {c: p for c, p in pos.items() if c not in kept} or pos
+        if len(live) == 1:
+            return next(iter(live))
+        return min((min(abs(p - m) for m in marks), c) for c, p in live.items())[1]
 
     # -- resolve the client -------------------------------------------------
     # For a two-category question an ambiguous client can often be separated by
@@ -928,13 +961,31 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     # Steel Corporation and outscored the client HV-IC-0054 actually names
     # ("all completed trishakti work"). Retry unstripped if that finds nothing,
     # so a client whose own name overlaps the work title is not lost.
+    def strip_cats(text):
+        """Blank category mentions before matching a client name.
+
+        The mirror of what cat_text does for the other direction. `buildings`
+        belongs to exactly one client name -- Central Works & Buildings Bureau
+        -- so "trishakti, buildings vs small buildings" scored that client
+        within 0.01 of the one the question actually names, and the resolver
+        refused. Where the word is being used as a CATEGORY it says nothing
+        about which client is meant.
+        """
+        out = text
+        for c in catidx.cats:
+            out = catidx.pat[c].sub(lambda m: " " * len(m.group(0)), out)
+        return out
+
     # The state tie-break is offered only when NO work is named. Every work
     # title carries a state ("WTP Augmentation - West Bengal Pkg-51"), so with a
     # work in play a free-floating state token is more likely to be the work's
     # than the client's -- and there the refusal is what lets the named work's
     # own client take over two lines below, which is always right.
-    client = clidx.resolve(drop_negated_states(strip_work(q)), tiebreak=tiebreak,
-                           state_tiebreak=named_work is None)
+    client = clidx.resolve(drop_negated_states(strip_cats(strip_work(q))),
+                           tiebreak=tiebreak, state_tiebreak=named_work is None)
+    if not client:
+        client = clidx.resolve(drop_negated_states(strip_work(q)), tiebreak=tiebreak,
+                               state_tiebreak=named_work is None)
     if not client and named_work and named_work.get("client"):
         # The named work's client, BEFORE any unstripped retry. Questions that
         # name only a work ("the Farhan Khan PMP on Highway Construction —
@@ -1031,6 +1082,8 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
             plan["shape"] = "referenced_share"
         else:
             plan["shape"] = "collection_pct"
+        if plan["estate"] and plan["shape"] == "referenced_share":
+            plan["scope"] = "all"               # "company-wide, what percentage..."
         if not client or weak_client:
             plan["confidence"] = 0.0 if not client else 0.5
         return plan
@@ -1051,7 +1104,11 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
             # whole book does not correspond to any shape, so leave it to the
             # compositional query rather than returning a client-scoped zero.
             if plan["shape"] == "absence":
-                plan["scope"] = "all"
+                # `absence` scopes by category on its own when one is named --
+                # "of our roads maintenance jobs, how many have no reference
+                # letter" is 4 of 8, not 23 of 155.
+                if not plan.get("category"):
+                    plan["scope"] = "all"
             else:
                 plan["shape"] = None
             return plan
@@ -1065,6 +1122,15 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     # 1. mean vs median. Must precede avg_work_size, which also says "average".
     if _has(_MEDIAN, q) and (_mean_asked(q) or _has(r"\btypical\b", q)):
         plan["shape"] = "mean_median_gap"
+        # The sign convention is stated in the question, both ways. A question
+        # that says "negative if the mean is lower" wants the signed figure; one
+        # that says "report it positive" or "as an absolute number" does not.
+        plan["absolute"] = bool(
+            _has(r"positive number|report it positive|as a positive|absolute"
+                 r"|regardless of sign|ignore the sign|magnitude|either way"
+                 r"|whichever is (?:larger|bigger)|as a gap\b|it is a gap", q)
+            and not _has(r"negative if|negative when|keep the (?:sign|minus)"
+                         r"|signed\b|leave it negative|show the minus", q))
         if not client or weak_client:
             plan["confidence"] = 0.0 if not client else 0.5
         return plan
@@ -1082,9 +1148,11 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     #    "combined value" wording with hop_aggregate; "after" is the separator.
     if person and _has(r"\bafter\b|\bsince\b|\bpost[-\s]|subsequent to|following\b"
                        r"|once .{0,20}(?:issued|certified)|afterwards|onwards?\b", q) and \
-            _has(r"\bled\b|\bdirected\b|\bheaded\b|works? (?:he|she) |completed|finished"
-                 r"|brought to completion|delivered|wrapped up|closed out|completions"
-                 r"|brought in|she brought|he brought", q) and \
+            _has(r"\bled\b|\bdirected\b|\bheaded\b|works? (?:he|she) |complet\w*|finish\w*"
+                 r"|brought to completion|deliver\w*|wrapped up|closed out"
+                 r"|brought in|she brought|he brought|sign(?:ed)?[- ]off|signed off"
+                 r"|saw through|took to completion|put (?:his|her) name to"
+                 r"|certif\w* delivery|post-?certification", q) and \
             not (_mean_asked(q) or _has(_MEDIAN + r"|typical", q)):
         # temporal_chain is a SUM over a person's post-credential works. A
         # question asking for an average is avg_work_size or mean_median_gap --
@@ -1213,10 +1281,17 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
 
     # 7c. one side of the ledger on its own, with nothing to subtract it from.
     # Reached only when no gap wording fired above.
+    # "How much cash has X actually PAID US across all invoices" measures what
+    # came in; `invoices` is the scope it came in over, not the quantity. The
+    # verb says which side of the ledger is being asked for.
+    _paid_in = _has(r"paid us|paid to us|has (?:actually )?paid|received|collected"
+                    r"|receipts|cash (?:in|has come)|come in|cleared", q)
+    _inv_is_scope = _has(r"(?:across|over|among|on|from|against) (?:all |the )?"
+                         r"(?:our |their )?invoices\b", q)
     if _has(r"\btotal\b|\bhow much\b|\baggregate\b|\bsum\b|\bgross\b"
             r"|what was actually invoiced|actually invoiced|ageing register", q) and \
             _has(r"invoiced|billed|invoices raised|raised on|invoices", q) and \
-            not _has(_OWED, q):
+            not _has(_OWED, q) and not (_paid_in and _inv_is_scope):
         plan["shape"] = "invoiced_total"
         if not client:
             plan["confidence"] = 0.0
@@ -1241,11 +1316,7 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
 
     # 9. threshold aggregate. A rupee bar plus "clear/cross/hit/at or above".
     thr = mine_threshold(q)
-    if thr is not None and _has(r"clear(?:s|ing)? the|clearing|crossing|cross(?:ed)? the|hitting"
-                                r"|hit the|exceeding|meet(?:ing)? or exceed|at or (?:over|above)"
-                                r"|above|over the|or higher|or more|and above|no less than"
-                                r"|at least|upwards of|valued at|cutoff|threshold|mark|limit"
-                                r"|bar\b|line\b", q):
+    if thr is not None and _has(_BAR + r"|or bigger|or larger|and up|qualifying|eligib\w*", q):
         plan["shape"] = "threshold_aggregate"
         plan["threshold"] = thr
         if not client or weak_client:

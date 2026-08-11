@@ -266,8 +266,12 @@ def absence(db, client=None, category=None, scope=None, **_):
     return sum(1 for w in p if not w.get("has_ref"))
 
 
-def referenced_share(db, client=None, **_):
-    p = _folio(db, client)
+def referenced_share(db, client=None, scope=None, category=None, **_):
+    p = _folio(db, client, scope)
+    if not p:
+        return None
+    if category:
+        p = [w for w in p if _cat_match(w, category)]
     if not p:
         return None
     return round(sum(1 for w in p if w.get("has_ref")) / len(p) * 100, 2)
@@ -479,11 +483,15 @@ def unbilled_gap(db, client=None, **_):
     return abs(awarded - ar["invoiced"])
 
 
-def mean_median_gap(db, client=None, work=None, person=None, **_):
+def mean_median_gap(db, client=None, work=None, person=None, absolute=False, **_):
     """Mean minus median contract value across a client's portfolio.
 
-    Signed: the questions ask for it "negative if avg dips". Reported as-is
-    rather than absolute, because the scorer compares to a signed gold.
+    Signed by default: the released questions ask for it "negative if avg dips"
+    and the gold is signed. But the sign is stated in the question either way,
+    and some ask for the other convention -- "the median actually sits above
+    the mean. By how much? Report the gap as a positive number". Answering
+    -192,266,667 there scores zero on a gold of 192,266,667, so the instruction
+    is read rather than assumed.
     """
     import statistics
     if not client and work:
@@ -495,7 +503,8 @@ def mean_median_gap(db, client=None, work=None, person=None, **_):
     v = _vals(db.portfolio(client))
     if len(v) < 2:
         return None
-    return round(sum(v) / len(v) - statistics.median(v))
+    gap = round(sum(v) / len(v) - statistics.median(v))
+    return abs(gap) if absolute else gap
 
 
 def category_delta(db, client=None, categories=None, **_):
