@@ -197,8 +197,25 @@ def exclusion_aggregate(db, client=None, category=None, **_):
     # badly wrong number. Returning None routes it to the logged fallback ladder.
     if not category:
         return None
+    # Exact match when the term IS one of the 13 category names, because the
+    # loose matcher collides in both directions on the one overlapping pair:
+    # asking to exclude "Small Buildings" also dropped every plain "Buildings"
+    # work, and vice versa. Central Works & Buildings Bureau holds two
+    # Buildings and one Small Buildings, so HV-IC-0328 ("excluding small
+    # buildings") was removing three works instead of one. The router already
+    # resolves the phrasing to a canonical category name, so exact is the right
+    # comparison; the loose matcher stays as the fallback for anything that is
+    # not a known category.
+    known = {(w.get("category") or "").strip().lower() for w in db.works}
+    term = (category or "").strip().lower()
+    if term in known:
+        def excluded(w):
+            return (w.get("category") or "").strip().lower() == term
+    else:
+        def excluded(w):
+            return _cat_match(w, category)
     return sum(w["value"] for w in db.portfolio(client)
-               if w.get("value") is not None and not _cat_match(w, category))
+               if w.get("value") is not None and not excluded(w))
 
 
 def doc_filtered_aggregate(db, client=None, grading=None, **_):

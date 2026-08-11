@@ -137,6 +137,29 @@ def main():
     if not mismatches:
         print("  no package/client disagreements")
 
+    print("--- exclusion removes exactly one category ---")
+    # "Buildings" and "Small Buildings" are substrings of one another, and the
+    # loose matcher treated each as matching the other in BOTH directions.
+    # Central Works & Buildings Bureau holds two Buildings works and one Small
+    # Buildings, so "excluding small buildings" dropped all three.
+    excl = 0
+    for q in questions:
+        plan = classify.plan_for(db, q["question"], q.get("answer_type"), cats, clients)
+        if plan["shape"] != "exclusion_aggregate":
+            continue
+        port = db.portfolio(plan.get("client"))
+        term = (plan.get("category") or "").strip().lower()
+        want = sum(w["value"] for w in port if w.get("value") is not None
+                   and (w.get("category") or "").strip().lower() != term)
+        got = executor.run(db, plan)
+        if got != want:
+            excl += 1
+            fail += 1
+            print(f"  FAIL {q['qid']} excluding {plan.get('category')!r}:"
+                  f" got {got} want {want}")
+    if not excl:
+        print("  all exclusions drop exactly the named category")
+
     print("--- family census ---")
     for shape in sorted(set(census) | set(CENSUS)):
         want, got = CENSUS.get(shape, 0), census.get(shape, 0)
