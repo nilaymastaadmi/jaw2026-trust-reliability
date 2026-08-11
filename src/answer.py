@@ -18,6 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import corpus
 import executor
 import classify
+import generic
+import graph
 import router
 
 
@@ -135,6 +137,11 @@ def answer_all(questions, verbose=True):
     # so a question the family classifier cannot place still gets the old
     # lexical treatment rather than nothing. Both are deterministic and offline.
     classify.set_state_tokens(db)
+    try:
+        gr = graph.Graph()
+    except Exception as e:
+        print(f"[graph] unavailable ({e}); named shapes only", file=sys.stderr)
+        gr = None
     catidx = classify.CategoryIndex({w["category"] for w in db.works if w.get("category")})
     clidx = classify.ClientIndex(db.all_clients())
 
@@ -153,7 +160,7 @@ def answer_all(questions, verbose=True):
     for q in questions:
         try:
             plan = _plan_one(db, q, catidx, clidx, overrides)
-            got, source = _run_one(db, plan, q, medians)
+            got, source = _run_one(db, plan, q, medians, gr)
         except Exception as e:
             # One unparseable question must not cost the other 332. Emit a
             # corpus-typical value of the right unit and record why.
@@ -184,10 +191,24 @@ def _plan_one(db, q, catidx, clidx, overrides):
     return plan
 
 
-def _run_one(db, plan, q, medians):
+def _run_one(db, plan, q, medians, gr=None):
     got = executor.run(db, plan)
     if got is not None:
         return got, "router"
+    # No named shape produced a number. Before guessing, try the compositional
+    # graph query -- it reaches entities the 23 shapes cannot (plant register,
+    # trial balance, BOQ) and cuts of the works nobody wrote a shape for
+    # (counts, the whole estate, one category across all clients, by state).
+    if gr is not None:
+        try:
+            gp = generic.plan(db, gr, q["question"], q.get("answer_type"),
+                              plan.get("client"), plan.get("category"))
+            if gp:
+                got = gr.run(gp)
+                if got is not None:
+                    return got, "graph:" + gp["entity"] + "/" + gp["fn"]
+        except Exception as e:
+            print(f"[graph] {q['qid']}: {type(e).__name__}: {e}", file=sys.stderr)
     return fallbacks(db, plan, q, medians)
 
 
