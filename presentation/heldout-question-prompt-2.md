@@ -8,6 +8,11 @@ unbiased number. Two rules make that work:
   If it is the same session that produced the first one, start a **fresh** session.
 - When it comes back, we run it **once**, cold, and change nothing on the basis of it.
 
+The important change from the first prompt: it no longer hands over a closed list of
+question types. A list of the things we already handle can only measure how well we
+handle them. Half of this set is deliberately left to the generator to invent from the
+corpus, and every question is tagged so the two halves can be scored separately.
+
 Paste everything below the line.
 
 ---
@@ -25,15 +30,25 @@ pip install pymupdf openpyxl
 ```
 
 687 documents about **National Infrastructure Corp. Ltd.**, a synthetic Indian
-infrastructure contractor: 155 completed works (2010–2025), delivered for government
-departments and authorities, 486 employees on record. Read `dataset/README.md`,
-`dataset/BRIEFING.md`, and the 21 worked examples in `dataset/sample_questions.json`.
+infrastructure contractor: 155 completed works (2010–2025), 486 employees on record,
+6 business units. Read `dataset/README.md`, `dataset/BRIEFING.md`, and the 21 worked
+examples in `dataset/sample_questions.json`.
 
-Document types you will need: `completion_certificate` (155 — value, dates, and the
-client's written grading), `company_completion_certificate` (155), `reference_letter`
-(132 — not every work has one), `personnel_certificate` (48 credentials), `cv` (39
-engineers), and 9 `.xlsx` workbooks (receivables ageing, BOQ, trial balance, plant
-register).
+**The whole estate is in scope.** Counts by type:
+
+| Type | N | | Type | N |
+|---|---|---|---|---|
+| `completion_certificate` | 155 | | `compliance_matrix` | 40 |
+| `company_completion_certificate` | 155 | | `general_ledger_book` | 8 |
+| `reference_letter` | 132 | | `bank_statement` | 8 |
+| `performance_bond` | 60 | | `financial_statement` | 7 |
+| `personnel_certificate` | 48 | | `tender_dossier` | 6 |
+| `cv` | 39 | | `ra_bill` / `final_ra_bill` | 12 |
+| `iso_certificate` | 5 | | `annual_report` | 2 |
+| `past_performance_portfolio` | 1 | | workbooks (`.xlsx`) | 9 |
+
+The workbooks hold receivables ageing, a plant and machinery register, a trial balance
+by year, and BOQ/measurement detail.
 
 Three extraction warnings:
 - Use **PyMuPDF**. Some PDF libraries silently return field *labels* and drop field
@@ -53,15 +68,19 @@ Three extraction warnings:
    "answer": 2008199999,
    "derivation": "PWD Maharashtra, 6 works: 193299999 + 176600000 + … = 2008199999",
    "difficulty": "medium",
-   "topic": "client portfolio total"}
+   "topic": "client portfolio total",
+   "family": "listed"}
 ]}
 ```
 
 `answer_type` ∈ `money` (rupees, plain integer) · `count` · `percent` (out of 100, two
 decimals) · `days`. `derivation` is **required** — name the works, values or documents
-used, so a disagreement can be settled against the corpus.
+used, so a disagreement can be settled against the corpus. `family` is `"listed"` or
+`"invented"`, per the two sections below.
 
-## Topics — roughly 13–14 questions each
+## Section A — 150 questions, `"family": "listed"`
+
+Roughly 7 each. These make the set comparable to an earlier one.
 
 1. Total value delivered for one client
 2. Client total **excluding** one category of work
@@ -69,8 +88,8 @@ used, so a disagreement can be settled against the corpus.
 4. Shortfall between a client's total and a credential threshold
 5. Gap between a client's largest and second-largest work
 6. Average work size across a client's portfolio
-7. Mean minus median contract value (state explicitly whether a negative should stay
-   negative or be reported positive — vary which you ask for)
+7. Mean minus median contract value (say explicitly whether a negative stays negative
+   or is reported positive — vary which you ask for)
 8. Value difference between **two categories** for one client
 9. Change in a client's completed value **between two calendar years**
 10. A **single** calendar year's completed value for one client
@@ -89,35 +108,60 @@ used, so a disagreement can be settled against the corpus.
 21. Total invoiced, or total received, for a client on its own
 22. Gap between total contract value awarded and total invoiced
 
-## What I most want from this set
+## Section B — 150 questions, `"family": "invented"`
 
-**Variety of register.** The first requirement is that these should not all sound like
-they came from one template. Write across:
-- a formal audit or prequalification memo
-- a hurried internal message before a deadline, lowercase and unpunctuated
-- a spoken question transcribed, with a false start or a self-correction
-- an email from a non-technical colleague who describes things imprecisely
-- a terse one-liner with no context at all
-- a long paragraph where the actual question arrives at the end
+**This is the more important half. Do not reuse Section A's topics.**
 
-**Spread across entities.** Use as many different clients and people as the corpus
-allows. Do not lean on the same handful.
+Go through the corpus and ask what else a bid desk, an auditor, or a prequalification
+panel would legitimately want a number for. Deliberately cover the document types
+Section A never touches — performance bonds, compliance matrices, ISO certificates,
+tender dossiers, RA bills, bank statements, financial statements, ledgers, annual
+reports, the plant and machinery register, the trial balance, and BOQ detail.
 
-**Combined constraints** (~20 questions). Two conditions at once — a category *and* a
-year, a threshold *and* an exclusion, a role *and* a category. These are legitimate
-bid-desk questions and they are where a rigid system breaks.
+Some directions, to start you off rather than to limit you:
 
-**Difficulty: 50 easy / 150 medium / 100 hard.** For the hard tier draw on:
-- client named by shorthand, abbreviation, or partial name
-- a work named without its package number
-- a person named by first name only
-- the question names a work, then asks about "that client" without naming them
-- a figure stated in the question that is **wrong**, where the correct answer
-  contradicts the asker
-- category names where one contains another
-- two clients differing only by state, including cases that say which one is *not*
-  meant
-- a question that reads like one topic but is actually another
+- **Bonds and guarantees** — value outstanding, bonds against one client, expiry
+  spans, guarantee as a proportion of contract value
+- **Plant and machinery** — gross block, count by type or location, value of what is
+  owned versus hired, how much is safety-certified, average age
+- **Accounts** — a line item in a given year's trial balance, movement between years,
+  a figure from a financial statement, ledger totals, receipts in a bank statement
+- **Tendering** — number of bids submitted, their aggregate value, compliance-matrix
+  pass rates
+- **Accreditation** — ISO certificates held, their validity spans
+- **Workforce** — headcount, credentials held across staff, how many hold more than
+  one, designation mix
+- **Portfolio shapes nobody asked for yet** — counts rather than sums (how many works
+  above a value, how many clients, how many works in a year); the whole estate rather
+  than one client; a category across all clients; the *smallest* rather than the
+  largest; a span between two completion dates; a duration of one work start to finish
+- **Cross-cutting** — combine two constraints, or two data sources: a category *and* a
+  year, a role *and* a threshold, works in one state, plant at one location against
+  works in that state
+
+Invent freely beyond these. If a number is readable from the documents and a
+reasonable person might ask for it, it belongs in Section B — **especially if it feels
+unlike anything in Section A.** Some of these are expected to be unanswerable by the
+system under test; that is exactly what the section is for.
+
+## Difficulty and register (both sections)
+
+**50 easy / 150 medium / 100 hard.** Hard tier should draw on: client named by
+shorthand or partial name; a work named without its package number; a person named by
+first name only; the question naming a work then asking about "that client"; a figure
+stated in the question that is **wrong**, where the correct answer contradicts the
+asker; category names where one contains another; two clients differing only by state,
+including phrasing that says which one is *not* meant; a question that reads like one
+topic but is actually another.
+
+**Vary the register.** These should not sound like one template. Write across a formal
+audit memo; a hurried lowercase message before a deadline; transcribed speech with a
+false start or self-correction; an email from a non-technical colleague who describes
+things imprecisely; a bare one-liner; and a long paragraph where the question arrives
+at the end.
+
+**Spread across entities.** Use as many different clients, people, categories and
+years as the corpus allows. Do not lean on the same handful.
 
 ## Rules
 
@@ -125,7 +169,7 @@ bid-desk questions and they are where a rigid system breaks.
   compute totals mentally and do not estimate. A wrong "correct" answer is worse than
   no question, because it sends the other side chasing a bug that does not exist.
 - Every question must have exactly **one defensible answer**. If you cannot pin one,
-  drop the question.
+  drop it.
 - Do not include the same question twice in different words.
 
 ## One extra section
