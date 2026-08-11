@@ -57,9 +57,14 @@ python src/test_executor.py       # executor against the 21 published golds
 python src/test_classify.py       # classifier: golds, coverage, family census
 python src/test_router_stress.py  # unseen paraphrases
 python src/test_entities.py       # client and person resolution
+python src/test_io.py             # the question file we are actually handed
+python src/stress.py              # 3,097 paraphrases of the released set
 ```
 
-`test_classify.py` is the one that matters. It asserts the 21 worked samples,
+`stress.py` is the one that matters most for an unseen question set, and
+`test_classify.py` for this one.
+
+`test_classify.py` It asserts the 21 worked samples,
 the three answers the dataset README prints as a format example (real scored
 questions), that all 333 questions produce a number, that every resolved client
 agrees with the package the question names, that an exclusion drops exactly the
@@ -82,7 +87,51 @@ starts or stops firing.
 | `src/answer.py` | questions → `work/submission.csv` |
 | `src/client_overrides.json` | the four questions the corpus cannot determine |
 | `src/reconcile.py` | diff harness for an independent second extraction |
+| `src/graph.py` | entity store and compositional query, for what no shape covers |
+| `src/generic.py` | question → a compositional query |
+| `src/stress.py` | paraphrase harness: rewrite the released set, require the answers not to move |
+| `src/score_heldout.py` | score against any question file carrying answers |
 | `src/test_*.py` | verification suite |
+
+## Measuring robustness without a held-out set
+
+The tie-break runs this harness on questions nobody here has seen. Held-out sets
+measure that, but they are scarce and they burn: once the failures have been
+read, the score is no longer honest.
+
+`src/stress.py` does not burn. It takes the 333 released questions — whose
+answers are confirmed correct at 100.000 — rewrites each one sixteen ways
+**without changing what it asks**, and requires the answer not to move. Every
+drop is a real bug, found without spending a held-out set.
+
+| | |
+|---|---|
+| `synonym` | family vocabulary swapped for wording the set never uses |
+| `money` / `numword` | `INR 30 Cr` ⇄ `30,00,00,000` ⇄ `thirty crore` |
+| `hurried` / `formal` / `spoken` / `statement` | four registers |
+| `buried` / `trailing` / `punct` | the question after a paragraph; the client at the end |
+| `sibling` / `shorthand` | "the Rajasthan one, not Uttar Pradesh"; "Trishakti" alone |
+| `firstname` / `pkgless` | a person by first name; a work without its package number |
+| `decoy` | a figure the asker states and is wrong about |
+| `compose` | three rewrites at once, which is how a real question differs |
+
+The first run scored **97.01%** and the failures were not the expected ones —
+naming a client by one distinctive word returned the sum of all 155 works, 56
+times. All sixteen now hold at **100.00%** over 3,097 rewrites, and the released
+set stayed byte-identical throughout, so none of it was bought with a question
+already answered.
+
+`src/test_io.py` does the same for the question *file*: thirteen awkward
+versions of the released set — a bare list, `{data: []}`, JSONL, `id`/`text`
+field names, a UTF-8 BOM, UTF-16, CRLF, duplicated rows, rows with no qid —
+must all still produce the same 333 answers. The BOM case would have cost the
+entire run.
+
+`answer_type` is treated the same way. It partitions the set before any lexical
+test runs and it arrives as an *input field*; with the field stripped the
+harness scored 80.480 instead of 100.000. It is now recovered from the question
+when absent — 354/354 correct across every question the organisers have
+published — so the released set scores 100.000 with or without it.
 
 ## Answering questions this harness has not seen
 
