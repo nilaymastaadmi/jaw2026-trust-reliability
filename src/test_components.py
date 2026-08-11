@@ -142,22 +142,12 @@ def main():
     check("role present on >=154 works", sum(1 for w in works if w.get("role")) >= 154)
     print(f"       distribution: {roles}")
 
-    print(f"\n{'ALL COMPONENT CHECKS PASS' if not FAIL else f'{len(FAIL)} FAILED: {FAIL}'}")
-    return 1 if FAIL else 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
-
-
-def test_no_control_bytes():
-    """Guard against a bug that bit twice and is invisible in every viewer.
-
-    A shell heredoc turned `\b` in a regex into a literal 0x08 BACKSPACE byte.
-    The source looked correct in Read, in an editor, and in inspect.getsource(),
-    but the pattern silently never matched -- the package index built empty, and
-    later all 24 year_delta questions returned None. Only `cat -A` revealed it.
-    """
+    # Guard against a bug that bit TWICE and is invisible in every viewer:
+    # a shell heredoc turned \b in a regex into a literal 0x08 BACKSPACE byte.
+    # The source read correctly in the editor and in inspect.getsource(), but
+    # the pattern silently never matched -- first the package index built empty,
+    # then all 24 year_delta questions returned None. Only `cat -A` showed it.
+    print("\n--- source hygiene ---")
     import glob
     bad = {}
     for f in glob.glob(str(Path(__file__).resolve().parent / "*.py")):
@@ -165,5 +155,11 @@ def test_no_control_bytes():
         ctrl = sorted({c for c in raw if c < 9 or 11 <= c <= 12 or 14 <= c <= 31})
         if ctrl:
             bad[Path(f).name] = ctrl
-    assert not bad, f"stray control bytes: {bad}"
-    print(f"  OK  no stray control bytes in any src/*.py")
+    check("no stray control bytes in any src/*.py", not bad, f"{bad}")
+
+    print(f"\n{'ALL COMPONENT CHECKS PASS' if not FAIL else f'{len(FAIL)} FAILED: {FAIL}'}")
+    return 1 if FAIL else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
