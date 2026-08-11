@@ -10,3 +10,9 @@ __pycache__/
 .venv/
 venv/
 .DS_Store
+
+# Presentation build tooling
+presentation/node_modules/
+presentation/package*.json
+presentation/*.pdf
+presentation/slide-*.jpg
