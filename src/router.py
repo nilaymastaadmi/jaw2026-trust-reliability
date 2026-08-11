@@ -1,19 +1,12 @@
 """Question text -> a structured plan the executor can run.
 
-Two backends:
+The original lexical rule ladder. classify.py supersedes it for the evaluation
+set; this is retained as a fallback for any question the family classifier
+cannot place, so coverage degrades rather than disappears.
 
-  deterministic  always available, instant, free.  Lexical signals per shape
-                 plus the parameter miners.  Validated 25/25 on the samples.
-  llm            escalation for questions the deterministic router is unsure
-                 about.  Used only when a credential exists -- the `claude`
-                 CLI is session-limited and would consume the operator's own
-                 quota mid-competition, so it is never the primary path.
-
-The router NEVER computes an answer.  It picks a shape and extracts parameters;
+The router NEVER computes an answer. It picks a shape and extracts parameters;
 executor.py does every sum, count, difference and date span.
 """
-import json
-import os
 import re
 
 from normalize import threshold_from_text, GRADES
@@ -396,88 +389,3 @@ def route(db, question, answer_type=None):
     if plan["shape"] != "date_span" and not plan["client"] and not plan["person"]:
         plan["confidence"] = 0.0
     return plan
-
-
-# ---------------------------------------------------------------- LLM backend
-
-ROUTER_SYSTEM = """You classify questions about an infrastructure contractor's records.
-
-Return ONE shape and its parameters. You never compute or estimate a number.
-
-Shapes:
-  absence                 count of a client's works with no reference letter
-  referenced_share        percent of a client's works that have a reference letter
-  rank_value              largest work value minus second largest, for a client
-  threshold_aggregate     sum of a client's works at or above a rupee threshold
-  gap_to_threshold        target minus the sum of a client's works
-  exclusion_aggregate     sum of a client's works excluding one category
-  doc_filtered_aggregate  sum of a client's works carrying a given grading
-  avg_work_size           mean value across a client's works
-  role_split              sum of a client's works where contractor role matches
-  hop_aggregate           person -> their client -> sum of that CLIENT'S WHOLE portfolio
-  temporal_chain          sum of a person's works completed after their credential date
-  distinct_count          number of distinct work categories for a person
-  date_span               days between a credential issue date and a work's completion
-  client_total            sum of a client's works (fallback)
-
-Rules:
-- hop_aggregate always means the client's ENTIRE portfolio, even when the question
-  says "assignments HE delivered". The person only identifies the client.
-- Thresholds in words ("seventy-three crore") are rupees: 1 crore = 10,000,000.
-- Copy client, person and work names verbatim from the question."""
-
-ROUTER_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "shape": {"type": "string", "enum": SHAPES},
-        "client": {"type": ["string", "null"]},
-        "person": {"type": ["string", "null"]},
-        "work": {"type": ["string", "null"]},
-        "threshold": {"type": ["integer", "null"]},
-        "category": {"type": ["string", "null"]},
-        "grading": {"type": ["string", "null"]},
-        "role": {"type": ["string", "null"]},
-    },
-    "required": ["shape"],
-    "additionalProperties": False,
-}
-
-
-def llm_available():
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        return False
-    try:
-        import anthropic  # noqa: F401
-        return True
-    except ImportError:
-        return False
-
-
-def route_llm(questions, model="claude-opus-5"):
-    """Batch-classify [{qid, question}] -> {qid: plan}.  Requires a credential.
-
-    Batched so one request covers many questions; the executor still does all
-    arithmetic, so a router slip costs one question rather than a wrong number
-    everywhere.
-    """
-    import anthropic
-
-    client = anthropic.Anthropic()
-    numbered = "\n".join(f"{i+1}. {q['question']}" for i, q in enumerate(questions))
-    resp = client.messages.create(
-        model=model,
-        max_tokens=16000,
-        system=ROUTER_SYSTEM,
-        output_config={"format": {"type": "json_schema", "schema": {
-            "type": "object",
-            "properties": {"plans": {"type": "array", "items": ROUTER_SCHEMA}},
-            "required": ["plans"],
-            "additionalProperties": False,
-        }}},
-        messages=[{"role": "user",
-                   "content": f"Classify each question. Return one plan per question, "
-                              f"in order.\n\n{numbered}"}],
-    )
-    text = next(b.text for b in resp.content if b.type == "text")
-    plans = json.loads(text)["plans"]
-    return {q["qid"]: p for q, p in zip(questions, plans)}

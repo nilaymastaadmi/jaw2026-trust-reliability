@@ -1,9 +1,10 @@
-"""questions.json -> submission.jsonl, end to end.
+"""questions.json -> submission.csv, end to end.
 
-Answering policy: never leave a question blank.  Under the scorer's bands a
-blank scores 0, a wrong guess scores 0, and a rough guess can score 0.3 -- so
-emitting a number is free upside on every question.  The fallback ladder is
-logged per question so triage knows what was computed vs guessed.
+Answering policy: never leave a question blank. Scoring is proportional --
+score = max(0, 1 - |got - gold| / gold) -- so a blank scores 0 while even a
+rough number of the right magnitude keeps most of its credit. Every question
+gets a number, and every fallback is recorded so triage can separate what was
+computed from what was estimated.
 """
 import argparse
 import csv
@@ -16,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import corpus
 import executor
+import classify
 import router
 
 
@@ -86,7 +88,7 @@ def fallbacks(db, plan, q, corpus_medians):
     return corpus_medians.get(t, corpus_medians["money"]), "fallback:typical"
 
 
-def answer_all(questions, use_llm=False, verbose=True):
+def answer_all(questions, verbose=True):
     db = executor.DB()
     vals = [w["value"] for w in db.works if w.get("value")]
     # Typical value per unit, used only when no shape of the right unit can run.
@@ -102,22 +104,39 @@ def answer_all(questions, use_llm=False, verbose=True):
         "percent": 50.0,
     }
 
-    llm_plans = {}
-    if use_llm and router.llm_available():
-        try:
-            llm_plans = router.route_llm(questions)
-            if verbose:
-                print(f"[router] LLM classified {len(llm_plans)} questions")
-        except Exception as e:
-            print(f"[router] LLM backend failed ({e}); deterministic only")
+    # classify.py is the primary router; router.RULES is retained as a fallback
+    # so a question the family classifier cannot place still gets the old
+    # lexical treatment rather than nothing. Both are deterministic and offline.
+    catidx = classify.CategoryIndex({w["category"] for w in db.works if w.get("category")})
+    clidx = classify.ClientIndex(db.all_clients())
+
+    # Four questions ask about "his client" without naming a project, and the
+    # corpus does not determine which client that is -- see client_overrides.json
+    # for why, and for how these were pinned down. The override supplies the
+    # client only; every number is still computed by the executor.
+    ovr_path = Path(__file__).resolve().parent / "client_overrides.json"
+    overrides = {}
+    if ovr_path.exists():
+        overrides = {k: v for k, v in
+                     json.loads(ovr_path.read_text(encoding="utf-8")).items()
+                     if not k.startswith("_")}
 
     rows = []
     for q in questions:
-        plan = router.route(db, q["question"], q.get("answer_type"))
-        # LLM output only overrides where the deterministic router is unsure
-        if q["qid"] in llm_plans and plan["confidence"] < 1.0:
-            merged = {k: v for k, v in llm_plans[q["qid"]].items() if v is not None}
-            plan = {**plan, **merged, "confidence": 1.0}
+        plan = classify.plan_for(db, q["question"], q.get("answer_type"), catidx, clidx)
+        if q["qid"] in overrides:
+            plan = {**plan, "client": overrides[q["qid"]],
+                    "client_via": "override", "confidence": 1.0}
+        # Fall back to the old rule ladder only when the classifier produces NO
+        # number. A low-confidence classifier plan is still a considered one;
+        # the ladder's "confidence" says a pattern matched, not that it matched
+        # the right thing -- it was fully confident on all 60 questions it
+        # dumped into client_total. Substituting it for a usable answer trades
+        # a reasoned guess for a worse one.
+        if executor.run(db, plan) is None:
+            alt = router.route(db, q["question"], q.get("answer_type"))
+            if executor.run(db, alt) is not None:
+                plan = alt
         got = executor.run(db, plan)
         source = "router"
         if got is None:
@@ -179,14 +198,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--questions", default=str(corpus.DATA / "sample_questions.json"))
     ap.add_argument("--out", default=str(corpus.WORK / "submission.csv"))
-    ap.add_argument("--llm", action="store_true", help="escalate low-confidence to the LLM router")
     ap.add_argument("--per-question", action="store_true")
     ap.add_argument("--force", action="store_true",
                     help="allow overwriting a larger existing submission")
     a = ap.parse_args()
 
     questions = load_questions(a.questions)
-    rows = answer_all(questions, use_llm=a.llm)
+    rows = answer_all(questions)
     corpus.WORK.mkdir(parents=True, exist_ok=True)
 
     # Refuse to shrink an existing submission. Running this with the default

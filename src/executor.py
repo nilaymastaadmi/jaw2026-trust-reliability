@@ -31,6 +31,13 @@ class DB:
             self.receivables = (fin.get("receivables") or {}).get("by_client", {})
         except Exception:
             self.receivables = {}
+        # The receivables universe is NOT a subset of the works universe.
+        # "Public Health Engineering Dept, West Bengal" has 21 invoices on file
+        # and no completed work, so it is absent from self.clients -- and
+        # HV-IC-0398 asks for exactly its outstanding balance. Resolution must
+        # therefore run over the union, or that question resolves to a
+        # same-named sibling and returns a confident wrong number.
+        self.all_names = sorted(set(self.clients) | set(self.receivables))
         self._by_key = {w["work_key"]: w for w in self.works}
         # package number -> work. Unique across all 155, so it identifies a work
         # outright regardless of how the name around it is spelled or ordered.
@@ -53,7 +60,7 @@ class DB:
         if not name:
             return None
         n = name.strip().lower()
-        for c in self.clients:
+        for c in self.all_names:
             if c.lower() == n:
                 return c
         cands = [c for c in self.clients if n in c.lower() or c.lower() in n]
@@ -110,6 +117,10 @@ class DB:
             return self._by_key[k]
         m = difflib.get_close_matches(k or "", list(self._by_key), n=1, cutoff=0.6)
         return self._by_key[m[0]] if m else None
+
+    def all_clients(self):
+        """Every client nameable by a question: works portfolio plus receivables."""
+        return self.all_names
 
     # ---------------------------------------------------------- selection
     def portfolio(self, client):
@@ -186,8 +197,25 @@ def exclusion_aggregate(db, client=None, category=None, **_):
     # badly wrong number. Returning None routes it to the logged fallback ladder.
     if not category:
         return None
+    # Exact match when the term IS one of the 13 category names, because the
+    # loose matcher collides in both directions on the one overlapping pair:
+    # asking to exclude "Small Buildings" also dropped every plain "Buildings"
+    # work, and vice versa. Central Works & Buildings Bureau holds two
+    # Buildings and one Small Buildings, so HV-IC-0328 ("excluding small
+    # buildings") was removing three works instead of one. The router already
+    # resolves the phrasing to a canonical category name, so exact is the right
+    # comparison; the loose matcher stays as the fallback for anything that is
+    # not a known category.
+    known = {(w.get("category") or "").strip().lower() for w in db.works}
+    term = (category or "").strip().lower()
+    if term in known:
+        def excluded(w):
+            return (w.get("category") or "").strip().lower() == term
+    else:
+        def excluded(w):
+            return _cat_match(w, category)
     return sum(w["value"] for w in db.portfolio(client)
-               if w.get("value") is not None and not _cat_match(w, category))
+               if w.get("value") is not None and not excluded(w))
 
 
 def doc_filtered_aggregate(db, client=None, grading=None, **_):
@@ -322,7 +350,16 @@ def unbilled_gap(db, client=None, **_):
     if not ar:
         return None
     awarded = sum(_vals(db.portfolio(c)))
-    return awarded - ar["invoiced"] if awarded else None
+    if not awarded:
+        return None
+    # Magnitude. The questions ask for a "gap", "shortfall", "variance" or
+    # "unbilled remainder" and never state a sign convention -- whereas every
+    # mean-vs-median question in the set spells out "negative if the mean is
+    # lower". This generator is explicit when it wants a signed answer, so the
+    # unmarked difference families are absolute. Affects one question:
+    # Irrigation & Waterways Dept, Govt of Uttar Pradesh is the only client
+    # invoiced for more than its completed works are worth.
+    return abs(awarded - ar["invoiced"])
 
 
 def mean_median_gap(db, client=None, work=None, person=None, **_):
