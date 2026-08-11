@@ -43,7 +43,7 @@ def build_cache(verbose=True):
         out = CACHE / f"{row['doc_id']}.txt"
         if out.exists():
             continue
-        text = _extract(DOCS / row["filename"].replace("/", "\\"))
+        text = _extract(DOCS / row["filename"])
         out.write_text(text, encoding="utf-8")
         n += 1
     if verbose:
@@ -56,7 +56,7 @@ def text(doc_id):
     if p.exists():
         return p.read_text(encoding="utf-8")
     row = next(r for r in index() if r["doc_id"] == doc_id)
-    return _extract(DOCS / row["filename"].replace("/", "\\"))
+    return _extract(DOCS / row["filename"])
 
 
 def by_type(doc_type):

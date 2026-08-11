@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import corpus
 import executor
+import classify
 import router
 
 
@@ -111,9 +112,19 @@ def answer_all(questions, use_llm=False, verbose=True):
         except Exception as e:
             print(f"[router] LLM backend failed ({e}); deterministic only")
 
+    # classify.py is the primary router; router.RULES is retained as a fallback
+    # so a question the family classifier cannot place still gets the old
+    # lexical treatment rather than nothing. Both are deterministic and offline.
+    catidx = classify.CategoryIndex({w["category"] for w in db.works if w.get("category")})
+    clidx = classify.ClientIndex(db.all_clients())
+
     rows = []
     for q in questions:
-        plan = router.route(db, q["question"], q.get("answer_type"))
+        plan = classify.plan_for(db, q["question"], q.get("answer_type"), catidx, clidx)
+        if plan["confidence"] < 1.0:
+            alt = router.route(db, q["question"], q.get("answer_type"))
+            if alt["confidence"] >= 1.0 and executor.run(db, alt) is not None:
+                plan = alt
         # LLM output only overrides where the deterministic router is unsure
         if q["qid"] in llm_plans and plan["confidence"] < 1.0:
             merged = {k: v for k, v in llm_plans[q["qid"]].items() if v is not None}
