@@ -122,8 +122,12 @@ function statCard(s, x, y, w, h, value, label, opts) {
     fontFace: BODY, fontSize: 12, color: "6B4E08", margin: 0,
   });
   s.addText("Started at 49.822 · seven scored submissions later, 100.000", {
-    x: M, y: 6.35, w: 11, h: 0.35, fontFace: BODY, fontSize: 13, italic: true,
+    x: M, y: 6.1, w: 11, h: 0.35, fontFace: BODY, fontSize: 13, italic: true,
     color: MUTED, margin: 0,
+  });
+  s.addText("JAW 2026 · hosted on GikaGraph · jaw.hackathon.gikagraph.ai", {
+    x: M, y: 6.62, w: 8.5, h: 0.3, fontFace: BODY, fontSize: 11,
+    color: STEEL, margin: 0,
   });
   s.addNotes(
     "Opening. Keep this to 45 seconds.\n\n" +
@@ -819,7 +823,129 @@ function statCard(s, x, y, w, h, value, label, opts) {
   );
 }
 
-// =================================================================== 14 GENERALISES
+// =================================================================== 14 TIMELINE + TEAM
+{
+  const s = lightSlide("Five days, two people", "Timeline and team");
+
+  s.addText("TIMELINE", {
+    x: M, y: 1.95, w: 5.2, h: 0.28, fontFace: BODY, fontSize: 11, bold: true,
+    color: AMBER, charSpacing: 1.5, margin: 0,
+  });
+  const tl = [
+    ["9 Aug", "Extraction built. 25/25 on the published samples, end to end.", false],
+    ["10 Aug", "Evaluation set drops — 333 questions, no answers.", false],
+    ["11 Aug am", "First scored run 49.822 — the question set had been revised under us.", false],
+    ["11 Aug midday", "Rule ladder replaced by the family classifier. 73.0 → 98.1.", true],
+    ["11 Aug pm", "Cross-checks and leaderboard measurement. 98.1 → 100.000.", true],
+    ["13 Aug", "Submission deadline.", false],
+    ["15 Aug", "This session.", false],
+  ];
+  let ty = 2.35;
+  tl.forEach((t, i) => {
+    s.addShape(pres.ShapeType.ellipse, {
+      x: M + 0.02, y: ty + 0.07, w: 0.2, h: 0.2,
+      fill: { color: t[2] ? AMBER : STEEL },
+    });
+    if (i < tl.length - 1) {
+      s.addShape(pres.ShapeType.rect, {
+        x: M + 0.11, y: ty + 0.27, w: 0.02, h: 0.4, fill: { color: "D5DEE5" },
+      });
+    }
+    s.addText(t[0], {
+      x: M + 0.4, y: ty, w: 1.35, h: 0.3, fontFace: BODY, fontSize: 12,
+      bold: true, color: INK, margin: 0,
+    });
+    s.addText(t[1], {
+      x: M + 1.8, y: ty, w: 3.6, h: 0.55, fontFace: BODY, fontSize: 11.5,
+      color: INKMUTED, margin: 0, lineSpacingMultiple: 1.05,
+    });
+    ty += 0.6;
+  });
+
+  const roles = [
+    {
+      x: M + 5.9,
+      who: "[ NAME 1 ]",
+      hat: "Extraction and data layer",
+      items: [
+        "PyMuPDF text pipeline over 678 PDFs; 7 certificate layouts plus prose fallbacks",
+        "Entity resolution: 51 raw name strings → 28 clients, 39 people",
+        "The 9 Excel workbooks → receivables, trial balance, BOQ",
+        "Independent re-extraction by a second document route — the 155/155 reconciliation",
+      ],
+    },
+    {
+      x: M + 9.15,
+      who: "[ NAME 2 ]",
+      hat: "Query layer and verification",
+      items: [
+        "Family classifier: question → shape and parameters, 18 families",
+        "Executor: the query shapes, where all arithmetic lives",
+        "Verification suite, including the checks that need no answer key",
+        "Submission strategy and the measurement that located the final error",
+      ],
+    },
+  ];
+  roles.forEach((r) => {
+    s.addShape(pres.ShapeType.roundRect, {
+      x: r.x, y: 1.95, w: 3.05, h: 4.45, rectRadius: 0.08, fill: { color: LIGHT },
+    });
+    s.addShape(pres.ShapeType.rect, {
+      x: r.x, y: 1.95, w: 3.05, h: 0.92, fill: { color: INK },
+    });
+    s.addText(r.who, {
+      x: r.x + 0.18, y: 2.05, w: 2.7, h: 0.32, fontFace: BODY, fontSize: 14,
+      bold: true, color: WHITE, margin: 0,
+    });
+    s.addText(r.hat, {
+      x: r.x + 0.18, y: 2.4, w: 2.7, h: 0.38, fontFace: BODY, fontSize: 11.5,
+      color: AMBER, margin: 0, lineSpacingMultiple: 1.05,
+    });
+    let ry2 = 3.05;
+    r.items.forEach((it) => {
+      s.addShape(pres.ShapeType.ellipse, {
+        x: r.x + 0.18, y: ry2 + 0.07, w: 0.11, h: 0.11, fill: { color: AMBER },
+      });
+      s.addText(it, {
+        x: r.x + 0.42, y: ry2, w: 2.45, h: 0.78, fontFace: BODY, fontSize: 10.5,
+        color: INK, margin: 0, lineSpacingMultiple: 1.08,
+      });
+      ry2 += 0.83;
+    });
+  });
+
+  s.addShape(pres.ShapeType.roundRect, {
+    x: M, y: 6.55, w: 12.1, h: 0.55, rectRadius: 0.06, fill: { color: INK },
+  });
+  s.addText("Code, tests and full commit history:", {
+    x: M + 0.25, y: 6.55, w: 3.5, h: 0.55, valign: "middle",
+    fontFace: BODY, fontSize: 11.5, color: "B9C7D2", margin: 0,
+  });
+  s.addText("github.com/nilaymastaadmi/jaw2026-trust-reliability", {
+    x: M + 3.75, y: 6.55, w: 5.2, h: 0.55, valign: "middle",
+    fontFace: MONO, fontSize: 11.5, color: AMBER, margin: 0,
+  });
+  s.addText("Scored commit 71ae506", {
+    x: M + 9.1, y: 6.55, w: 2.75, h: 0.55, valign: "middle", align: "right",
+    fontFace: MONO, fontSize: 11, color: "B9C7D2", margin: 0,
+  });
+  s.addNotes(
+    "60 seconds. Fill in both names before presenting — the deck ships with placeholders.\n\n" +
+    "Five days end to end, and the split was clean: one of us owned everything from the documents to " +
+    "the database, the other owned everything from the question to the number.\n\n" +
+    "That division is not just organisational — it is why the reconciliation on slide 6 is worth " +
+    "anything. The second extraction was written by the person who did NOT write the first one, using a " +
+    "different set of documents and no shared parser. 155 out of 155 agreeing means something precisely " +
+    "because the two routes had nothing in common.\n\n" +
+    "On the timeline, note the two amber points. Both fell on the same afternoon, and between them they " +
+    "account for the move from 73 to 100. The first was an architectural decision; the second was " +
+    "measurement discipline. Neither was extra extraction work — by that stage the data was already right.\n\n" +
+    "The repo link is live and includes the full commit history, so the scored commit can be verified " +
+    "against the code that produced it."
+  );
+}
+
+// =================================================================== 15 GENERALISES
 {
   const s = darkSlide();
   s.addText("What generalises", {
@@ -878,7 +1004,10 @@ function statCard(s, x, y, w, h, value, label, opts) {
     fontFace: BODY, fontSize: 13.5, color: WHITE, margin: 0, lineSpacingMultiple: 1.2,
   });
   s.addText("Thank you — questions welcome", {
-    x: M, y: 6.4, w: 7.6, h: 0.4, fontFace: HEAD, fontSize: 18, italic: true, color: MUTED, margin: 0,
+    x: M, y: 6.25, w: 7.6, h: 0.4, fontFace: HEAD, fontSize: 18, italic: true, color: MUTED, margin: 0,
+  });
+  s.addText("github.com/nilaymastaadmi/jaw2026-trust-reliability   ·   JAW 2026 on GikaGraph", {
+    x: M, y: 6.75, w: 9.5, h: 0.3, fontFace: MONO, fontSize: 10.5, color: STEEL, margin: 0,
   });
   s.addNotes(
     "Close in 30 seconds, then open for questions.\n\n" +
