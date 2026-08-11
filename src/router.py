@@ -21,7 +21,9 @@ from normalize import threshold_from_text, GRADES
 SHAPES = ["absence", "referenced_share", "rank_value", "threshold_aggregate",
           "gap_to_threshold", "exclusion_aggregate", "doc_filtered_aggregate",
           "avg_work_size", "role_split", "hop_aggregate", "temporal_chain",
-          "distinct_count", "date_span", "client_total"]
+          "distinct_count", "date_span", "client_total",
+          "outstanding_balance", "invoiced_total", "received_total",
+          "collection_pct", "category_delta", "unbilled_gap", "mean_median_gap"]
 
 # Exclusion wording, shared by the classifier rule and the category miner so the
 # two can never drift apart -- a question that classifies as an exclusion but
@@ -40,6 +42,32 @@ _EXCL_TRIGGER = r"\b(?:" + _EXCL_WORDS + r")\b"
 # share of X" contains "share of", which is a referenced_share trigger, and
 # would otherwise be answered as a percentage instead of a rupee total.
 RULES = [
+    # --- set v1.4 additions. These sit at the very top because their wording
+    # ("balance", "still owed", "gap between X and Y") otherwise gets captured
+    # by gap_to_threshold or rank_value, which answer from the wrong universe.
+    ("outstanding_balance", r"\b(?:still owe[sd]?|still owing|remaining balance"
+                            r"|outstanding|unpaid|yet to (?:be )?(?:pay|paid|collect)"
+                            r"|still (?:pending|outstanding|due)|amount due"
+                            r"|not yet (?:been )?(?:paid|collected|received))\b", 3),
+    ("outstanding_balance", r"\b(?:balance)\b[^.?]{0,40}\b(?:owed|due|outstanding|end|remaining)\b", 3),
+    ("collection_pct", r"\b(?:collection|collected)\b[^.?]{0,30}"
+                       r"\b(?:percent|percentage|pct|rate|out of one hundred)\b", 3),
+    ("collection_pct", r"\b(?:percent|percentage|pct|share)\b[^.?]{0,30}"
+                       r"\b(?:billed|invoiced|collected|received)\b", 3),
+    ("invoiced_total", r"\b(?:total|how much)\b[^.?]{0,25}\b(?:invoiced|billed)\b"
+                       r"(?![^.?]{0,30}\b(?:still|outstanding|owed|remaining)\b)", 2),
+    # These two must precede category_delta: its "difference between X and Y"
+    # pattern otherwise swallows both. Measured: of 58 category_delta fires,
+    # only 21 named two real categories; the rest were these two shapes.
+    ("mean_median_gap", r"\b(?:mean|average|avg)\b[^.?]{0,40}\bmedian\b"
+                        r"|\bmedian\b[^.?]{0,40}\b(?:mean|average|avg)\b", 3),
+    ("unbilled_gap", r"\b(?:awarded|sanction(?:ed)?|won|secured|contracted)\b[^.?]{0,60}"
+                     r"\b(?:billed|invoiced)\b"
+                     r"|\b(?:billed|invoiced)\b[^.?]{0,60}"
+                     r"\b(?:awarded|sanction(?:ed)?|contracted)\b", 3),
+    ("category_delta", r"\b(?:gap|difference|delta|spread)\b[^.?]{0,60}"
+                       r"\bbetween\b[^.?]{0,60}\b(?:and|versus|vs\.?)\b", 3),
+
     ("date_span", r"\b(?:how many days|number of days|days (?:passed|between|elapsed)"
                   r"|exact interval|what is the interval|days from)\b", 3),
     ("role_split", r"\bas\s+(?:a\s+)?(?:prime|jv partner|sub-?contractor)\b", 3),
@@ -195,6 +223,33 @@ _CATEGORY = re.compile(
     re.I)
 
 
+def _mine_categories(db, q):
+    """Return the work categories a question names, longest match first.
+
+    Matched against the 13 real category strings rather than free text, and
+    LONGEST-FIRST, because the organisers documented two collisions:
+      - 'buildings' is a substring of 'small buildings', so a naive search for
+        'buildings' also matches Small Buildings works;
+      - a category whose name also appears in the CLIENT's name is unusable
+        ('irrigation' matches every work of 'Irrigation & Waterways Dept').
+    Longest-first resolves the first. For the second we strip the client's own
+    name from the text before matching, so its tokens cannot supply a category.
+    """
+    text = q.lower()
+    for c in db.clients:                      # remove client name from the haystack
+        text = text.replace(c.lower(), " ")
+    cats = sorted({(w.get("category") or "").strip() for w in db.works if w.get("category")},
+                  key=len, reverse=True)
+    found, used = [], []
+    for c in cats:
+        cl = c.lower()
+        if cl in text and not any(cl in u for u in used):
+            found.append(c)
+            used.append(cl)
+            text = text.replace(cl, " ")      # consume, so 'small buildings' != 'buildings'
+    return found
+
+
 def _mine_category(q):
     m = _CATEGORY.search(q)
     if not m:
@@ -246,11 +301,13 @@ def classify(question):
 # rather than "how many days".
 _TYPE_SHAPES = {
     "days":    {"date_span"},
-    "percent": {"referenced_share"},
+    "percent": {"referenced_share", "collection_pct"},
     "count":   {"absence", "distinct_count"},
     "money":   {"client_total", "hop_aggregate", "avg_work_size", "rank_value",
                 "threshold_aggregate", "gap_to_threshold", "exclusion_aggregate",
-                "doc_filtered_aggregate", "role_split", "temporal_chain"},
+                "doc_filtered_aggregate", "role_split", "temporal_chain",
+                "outstanding_balance", "invoiced_total", "received_total",
+                "category_delta", "unbilled_gap", "mean_median_gap"},
 }
 
 
@@ -282,6 +339,10 @@ def route(db, question, answer_type=None):
         # a threshold question with no parseable number is really a total
         if plan["threshold"] is None and shape == "threshold_aggregate":
             plan["shape"], plan["confidence"] = "client_total", 0.0
+    if shape == "category_delta":
+        plan["categories"] = _mine_categories(db, question)
+        if len(plan["categories"]) < 2:      # cannot subtract without two
+            plan["confidence"] = 0.0
     if shape == "exclusion_aggregate":
         plan["category"] = _mine_category(question)
         # An exclusion with no identifiable category would silently sum the whole

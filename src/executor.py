@@ -22,6 +22,15 @@ class DB:
         self.works = db["works"]
         self.persons = {p["name"]: p for p in db["persons"]}
         self.clients = sorted({w["client"] for w in self.works if w.get("client")})
+        # Receivables, for the outstanding_balance family added in set v1.4.
+        # Verified against the organisers' own description: Outstanding equals
+        # Invoiced minus Received on all 519 rows, and the per-client figure
+        # spans 42,190x -- exactly the ratio their commit message quotes.
+        try:
+            fin = corpus.load_json("finance.json")
+            self.receivables = (fin.get("receivables") or {}).get("by_client", {})
+        except Exception:
+            self.receivables = {}
         self._by_key = {w["work_key"]: w for w in self.works}
         # package number -> work. Unique across all 155, so it identifies a work
         # outright regardless of how the name around it is spelled or ordered.
@@ -225,6 +234,105 @@ def client_total(db, client=None, **_):
     return sum(_vals(db.portfolio(client)))
 
 
+def outstanding_balance(db, client=None, **_):
+    """What a client still owes: invoiced less received, from the ageing workbook.
+
+    Deliberately NOT derivable from the completion certificates -- this is the
+    receivables universe (INR 1,750 Cr invoiced), not the contract universe
+    (INR 5,530 Cr awarded). Mixing them is a ~3x magnitude error.
+
+    The organisers chose this shape for resistance to guessing: the residual of
+    two large similar numbers spans 42,190x across clients, so a median guess is
+    worth almost nothing. Refuse rather than guess when the client is unlinked.
+    """
+    c = db.client(client)
+    ar = db.receivables.get(c)
+    if not ar:
+        return None
+    return ar["invoiced"] - ar["received"]
+
+
+def invoiced_total(db, client=None, **_):
+    c = db.client(client)
+    ar = db.receivables.get(c)
+    return ar["invoiced"] if ar else None
+
+
+def received_total(db, client=None, **_):
+    c = db.client(client)
+    ar = db.receivables.get(c)
+    return ar["received"] if ar else None
+
+
+def collection_pct(db, client=None, **_):
+    """Received as a percentage of invoiced."""
+    c = db.client(client)
+    ar = db.receivables.get(c)
+    if not ar or not ar["invoiced"]:
+        return None
+    return round(ar["received"] / ar["invoiced"] * 100, 2)
+
+
+def unbilled_gap(db, client=None, **_):
+    """Awarded contract value minus the amount invoiced.
+
+    Spans both universes deliberately: these questions name both operands
+    ("what they've sanctioned" vs "what we've billed"). Awarded comes from the
+    completion certificates, invoiced from the ageing workbook.
+    """
+    c = db.client(client)
+    ar = db.receivables.get(c)
+    if not ar:
+        return None
+    awarded = sum(_vals(db.portfolio(c)))
+    return awarded - ar["invoiced"] if awarded else None
+
+
+def mean_median_gap(db, client=None, work=None, person=None, **_):
+    """Mean minus median contract value across a client's portfolio.
+
+    Signed: the questions ask for it "negative if avg dips". Reported as-is
+    rather than absolute, because the scorer compares to a signed gold.
+    """
+    import statistics
+    if not client and work:
+        w = db.work(work)
+        client = w["client"] if w else None
+    if not client and person:
+        led = db.led_by(person)
+        client = led[0]["client"] if led else None
+    v = _vals(db.portfolio(client))
+    if len(v) < 2:
+        return None
+    return round(sum(v) / len(v) - statistics.median(v))
+
+
+def category_delta(db, client=None, categories=None, **_):
+    """Gap between two work categories within one client's portfolio.
+
+    Two aggregates that must both be right, then subtracted. The organisers
+    excluded the pairs that cannot be read unambiguously from the documents:
+    'buildings' is a substring of 'small buildings', and a category whose name
+    also occurs in the client's name (e.g. 'irrigation' vs 'Irrigation &
+    Waterways Dept') matches every one of that client's works. So an exact
+    category match is the right matcher here, not the loose one used elsewhere.
+    """
+    if not categories or len(categories) < 2:
+        return None
+    p = db.portfolio(client)
+    if not p:
+        return None
+
+    def total(term):
+        t = term.lower().strip()
+        return sum(w["value"] for w in p
+                   if w.get("value") is not None
+                   and (w.get("category") or "").lower().strip() == t)
+
+    a, b = total(categories[0]), total(categories[1])
+    return abs(a - b)
+
+
 def temporal_chain(db, person=None, credential=None, after=None, **_):
     cut = after or db.credential_date(person, credential)
     if not cut:
@@ -263,6 +371,13 @@ SHAPES = {
     "distinct_count": distinct_count,
     "date_span": date_span,
     "client_total": client_total,
+    "outstanding_balance": outstanding_balance,
+    "invoiced_total": invoiced_total,
+    "received_total": received_total,
+    "collection_pct": collection_pct,
+    "category_delta": category_delta,
+    "unbilled_gap": unbilled_gap,
+    "mean_median_gap": mean_median_gap,
 }
 
 
