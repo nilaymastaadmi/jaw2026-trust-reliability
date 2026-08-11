@@ -23,14 +23,15 @@ SHAPES = ["absence", "referenced_share", "rank_value", "threshold_aggregate",
           "avg_work_size", "role_split", "hop_aggregate", "temporal_chain",
           "distinct_count", "date_span", "client_total",
           "outstanding_balance", "invoiced_total", "received_total",
-          "collection_pct", "category_delta", "unbilled_gap", "mean_median_gap"]
+          "collection_pct", "category_delta", "unbilled_gap", "mean_median_gap", "year_delta", "year_total"]
 
 # Exclusion wording, shared by the classifier rule and the category miner so the
 # two can never drift apart -- a question that classifies as an exclusion but
 # whose category cannot be mined sums the WHOLE portfolio, which on a real case
 # measured 52.9% error at full confidence.
 _EXCL_WORDS = (r"excluding|except(?:\s+for)?|other than|apart from|but not|ignoring"
-               r"|leaving out|not including|without counting|besides|excl\.?")
+               r"|leaving out|not including|without counting|besides|excl\.?"
+               r"|minus the|less the|net of")
 _EXCL_TRIGGER = r"\b(?:" + _EXCL_WORDS + r")\b"
 
 # Ordered most-specific first: the first rule that fires wins.  Each entry is
@@ -56,6 +57,12 @@ RULES = [
                        r"\b(?:billed|invoiced|collected|received)\b", 3),
     ("invoiced_total", r"\b(?:total|how much)\b[^.?]{0,25}\b(?:invoiced|billed)\b"
                        r"(?![^.?]{0,30}\b(?:still|outstanding|owed|remaining)\b)", 2),
+    # Year-over-year delta -- the single largest missing family (24 questions).
+    # Must precede category_delta and rank_value, both of which match the same
+    # "difference between X and Y" wording. Gated on TWO distinct 4-digit years
+    # so a lone credential year ("PMP issued March 10, 2021") cannot trigger it.
+    ("year_delta", r"\b(?:19|20)\d{2}\b[^.?]{0,60}\b(?:19|20)\d{2}\b", 3),
+
     # These two must precede category_delta: its "difference between X and Y"
     # pattern otherwise swallows both. Measured: of 58 category_delta fires,
     # only 21 named two real categories; the rest were these two shapes.
@@ -313,7 +320,8 @@ _TYPE_SHAPES = {
                 "threshold_aggregate", "gap_to_threshold", "exclusion_aggregate",
                 "doc_filtered_aggregate", "role_split", "temporal_chain",
                 "outstanding_balance", "invoiced_total", "received_total",
-                "category_delta", "unbilled_gap", "mean_median_gap"},
+                "category_delta", "unbilled_gap", "mean_median_gap",
+                "year_delta", "year_total"},
 }
 
 
@@ -345,6 +353,11 @@ def route(db, question, answer_type=None):
         # a threshold question with no parseable number is really a total
         if plan["threshold"] is None and shape == "threshold_aggregate":
             plan["shape"], plan["confidence"] = "client_total", 0.0
+    if shape in ("year_delta", "year_total"):
+        yrs = sorted({int(y) for y in re.findall(r"(?:19|20)\d{2}", question)})
+        plan["years"] = yrs
+        if shape == "year_delta" and len(yrs) < 2:
+            plan["confidence"] = 0.0
     if shape == "category_delta":
         plan["categories"] = _mine_categories(db, question)
         if len(plan["categories"]) < 2:      # cannot subtract without two

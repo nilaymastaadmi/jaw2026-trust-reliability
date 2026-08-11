@@ -273,6 +273,43 @@ def collection_pct(db, client=None, **_):
     return round(ar["received"] / ar["invoiced"] * 100, 2)
 
 
+def year_delta(db, client=None, years=None, **_):
+    """Change in a client's completed-work value between two calendar years.
+
+    The questions phrase this many ways -- "net difference between 2020 and
+    2022", "how much their value moved", "the swing", "net shift from 2016
+    through 2018" -- but all reduce to: total for year A, total for year B,
+    subtract. Answering these with the whole-portfolio total (what happened
+    before) is wrong by roughly the size of the portfolio.
+
+    Absolute value: the wording is consistently magnitude-of-change, and a
+    signed answer would score 0 whenever the sign convention differs.
+    """
+    if not years or len(years) < 2:
+        return None
+    p = db.portfolio(client)
+    if not p:
+        return None
+    by_year = {}
+    for w in p:
+        if w.get("completed") and w.get("value") is not None:
+            y = int(w["completed"][:4])
+            by_year[y] = by_year.get(y, 0) + w["value"]
+    a, b = min(years), max(years)
+    return abs(by_year.get(b, 0) - by_year.get(a, 0))
+
+
+def year_total(db, client=None, years=None, **_):
+    """A client's completed-work value in one specific year."""
+    if not years:
+        return None
+    p = db.portfolio(client)
+    y = years[0]
+    return sum(w["value"] for w in p
+               if w.get("value") is not None
+               and w.get("completed") and int(w["completed"][:4]) == y) or None
+
+
 def unbilled_gap(db, client=None, **_):
     """Awarded contract value minus the amount invoiced.
 
@@ -377,6 +414,8 @@ SHAPES = {
     "collection_pct": collection_pct,
     "category_delta": category_delta,
     "unbilled_gap": unbilled_gap,
+    "year_delta": year_delta,
+    "year_total": year_total,
     "mean_median_gap": mean_median_gap,
 }
 
