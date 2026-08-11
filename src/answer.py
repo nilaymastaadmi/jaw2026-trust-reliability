@@ -184,7 +184,11 @@ def _plan_one(db, q, catidx, clidx, overrides):
     # right thing -- it was fully confident on all 60 questions it dumped into
     # client_total. So it is consulted only when the classifier produces
     # nothing at all, never to displace a considered plan.
-    if executor.run(db, plan) is None:
+    # Never for an estate-scoped question. Every rule in the old ladder is
+    # scoped to one client, so the best it can do there is a client-scoped zero
+    # -- and a zero is a number, which displaces the classifier's plan and stops
+    # the compositional query from ever seeing the question.
+    if not plan.get("estate") and executor.run(db, plan) is None:
         alt = router.route(db, q["question"], q.get("answer_type"))
         if executor.run(db, alt) is not None:
             plan = alt
