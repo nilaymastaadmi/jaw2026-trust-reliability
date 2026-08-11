@@ -57,6 +57,13 @@ _ABBREV_CI = {
     r"\bnicl\b": "national infrastructure corp ltd",
     r"\bnspo\b": "national special projects office",
     r"\bmah\b": "maharashtra",
+    r"\bmaha\b": "maharashtra",
+    r"\bguj\b": "gujarat",
+    r"\btn\b": "tamil nadu",
+    r"\bppc\b": "peninsular petroleum corporation",
+    r"\bcwbb\b": "central works and buildings bureau",
+    r"\bi and w\b": "irrigation and waterways",
+    r"\biandw\b": "irrigation and waterways",
 }
 
 # A state name on its own never identifies a client. Twelve of the 28 clients
@@ -103,6 +110,25 @@ def norm_text(s):
     s = re.sub(r"\bltd\b", "limited", s)
     s = re.sub(r"[^a-z0-9]+", " ", s)
     return re.sub(r"\s+", " ", s).strip()
+
+
+def drop_negated_states(text):
+    """Delete state names that appear in a NEGATED clause.
+
+    Questions disambiguate same-named siblings by exclusion -- "phed odisha not
+    gujarat", "tn pwd, not the gujarat or maharashtra one", "not the Rajasthan
+    or West Bengal department". Left in, those states are indistinguishable
+    from the one being asked for and the resolver refuses a genuinely
+    answerable question. Only state tokens are removed, and only within a few
+    words of a negation, so ordinary uses of "not" are untouched.
+    """
+    out = text
+    for m in re.finditer(r"\bnot\b((?:\s+\w+){0,5})", text, re.I):
+        span = m.group(1)
+        cleaned = " ".join("" if w.lower() in _STATE_TOKENS else w
+                           for w in span.split())
+        out = out.replace(m.group(0), "not " + cleaned, 1)
+    return out
 
 
 def _tokens(s):
@@ -449,11 +475,15 @@ _OWED = (r"still owe[sd]?|still owing|remaining balance|outstanding|unpaid|still
          r"|still on (?:our|their) books|not yet (?:been )?(?:paid|collected|received)"
          r"|total pending|remains? on the invoices|amount remains|adjusted balance"
          r"|net balance|pending|balance we need to stand by|balance when|cleared payments"
-         r"|payments they[’']?ve made|what[’']?s the balance|the balance still")
+         r"|payments they[’']?ve made|what[’']?s the balance|the balance still"
+         r"|invoiced less receipts?|billed less collected|invoiced minus received"
+         r"|unrecovered|exposure|owed to us|subtract everything received"
+         r"|invoiced\b[^.?]{0,25}\bsubtract\b[^.?]{0,25}\breceived")
 # Reference-letter vocabulary, as against payment-collection vocabulary.
 _REFERENCE = (r"reference letters?|client references?|reference\b|testimonials?|endorsements?"
               r"|client approval|client sign-?off|formal verification|backed by a client")
 _EXCLUDE = (r"excluding|except(?:\s+for)?|other than|apart from|but not|ignoring|leaving out"
+            r"|taken out|take out|drop\b|dropping\b|strip(?:ping)? out|with[^.?]{0,20}removed"
             r"|not including|without counting|excl\.?|minus the|net of|stripped out"
             r"|strip(?:ping)? out|carve (?:that )?out|set aside|filter out|filter(?:ing)? out"
             r"|drop(?:ping)? the|remove the|once we remove|after (?:the )?\w+ (?:division|segment)"
@@ -546,7 +576,7 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     # Steel Corporation and outscored the client HV-IC-0054 actually names
     # ("all completed trishakti work"). Retry unstripped if that finds nothing,
     # so a client whose own name overlaps the work title is not lost.
-    client = clidx.resolve(strip_work(q), tiebreak=tiebreak)
+    client = clidx.resolve(drop_negated_states(strip_work(q)), tiebreak=tiebreak)
     if not client and named_work and named_work.get("client"):
         # The named work's client, BEFORE any unstripped retry. Questions that
         # name only a work ("the Farhan Khan PMP on Highway Construction —
@@ -560,7 +590,7 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
         plan["work"] = named_work["work"]
         plan["client_via"] = "work"
     if not client:
-        client = clidx.resolve(q, tiebreak=tiebreak)
+        client = clidx.resolve(drop_negated_states(q), tiebreak=tiebreak)
     if not client and person:
         led = db.led_by(person)
         names = {w["client"] for w in led if w.get("client")}
@@ -612,7 +642,9 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
 
     # -- count: absence vs distinct categories ------------------------------
     if at == "count":
-        if _has(r"lack(?:s|ing)?|no client reference|without|missing|absent|un-?referenced", q):
+        if _has(r"lack(?:s|ing)?|without|missing|absent|un-?referenced"
+                r"|no\s+(?:\w+\s+){0,3}reference|unable to support"
+                r"|not\s+(?:\w+\s+){0,3}(?:referenced|supported)", q):
             plan["shape"] = "absence"
         else:
             plan["shape"] = "distinct_count"
@@ -641,8 +673,14 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
 
     # 3. works a person led that finished after their credential date. Shares
     #    "combined value" wording with hop_aggregate; "after" is the separator.
-    if person and _has(r"\bafter\b|\bsince\b|\bpost[-\s]", q) and \
-            _has(r"\bled\b|\bdirected\b|\bheaded\b|\bshe led\b|\bhe led\b|works? (?:he|she) ", q):
+    if person and _has(r"\bafter\b|\bsince\b|\bpost[-\s]|subsequent to|following\b"
+                       r"|once .{0,20}(?:issued|certified)|afterwards", q) and \
+            _has(r"\bled\b|\bdirected\b|\bheaded\b|works? (?:he|she) |completed|finished"
+                 r"|brought to completion|delivered|wrapped up|closed out|completions", q) and \
+            not _has(r"average|\bmean\b|median|typical", q):
+        # temporal_chain is a SUM over a person's post-credential works. A
+        # question asking for an average is avg_work_size or mean_median_gap --
+        # and "since" often means "because" rather than "after" (HV-IC-0119).
         plan["shape"] = "temporal_chain"
         if not person:
             plan["confidence"] = 0.0
@@ -651,8 +689,10 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     # 3b. contractor role. "our share as Prime", "the JV Partner total". The role
     # vocabulary is read off the database so this keeps working if the corpus
     # records different roles.
-    roles = [r for r in db.roles() if re.search(r"\b" + re.escape(r) + r"\b", q, re.I)]
-    if roles and _has(r"share|total|value|aggregate|sum|worth|portion|combined", q):
+    roles = [r for r in sorted(db.roles(), key=len, reverse=True)
+             if re.search(r"\b" + re.escape(r) + r"\b", q, re.I)]
+    if roles and _has(r"share|total|value|aggregate|sum|worth|portion|combined"
+                      r"|how much|add up|deliver(?:ed)?|executed", q):
         plan["shape"] = "role_split"
         plan["role"] = roles[0]
         if not client:
@@ -664,8 +704,10 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     # stated consistently across certificates -- but the shape and the parsed
     # data are both here, so a hidden set that reinstates it is answerable
     # rather than a guaranteed miss.
-    grades = [g for g in db.gradings() if re.search(r"\b" + re.escape(g) + r"\b", q, re.I)]
-    if grades and _has(r"grade[ds]?|grading|rated|rating|assessed|marked", q):
+    grades = [g for g in sorted(db.gradings(), key=len, reverse=True)
+              if re.search(r"\b" + re.escape(g) + r"\b", q, re.I)]
+    if grades and _has(r"grade[ds]?|grading|rated|rating|assessed|marked"
+                       r"|quality as|recorded? the quality|performance as", q):
         plan["shape"] = "doc_filtered_aggregate"
         plan["grading"] = grades[0]
         if not client:
@@ -695,8 +737,10 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     #    still need to secure ... to clear the 120 Cr credential threshold",
     #    which reads as a balance but is a shortfall against a bar.
     if _has(r"how much (?:more|additional|further)|additional work|must we (?:secure|win)"
-            r"|need to (?:bring in|secure|win)|to reach|to hit the|to clear the"
-            r"|shortfall to|how far short|still need to secure|more value do we need", q):
+            r"|need to (?:bring in|secure|win|land)|to reach|to hit the|to hit\b|to clear the"
+            r"|shortfall to|shortfall against|how far short|how far off|still need to secure"
+            r"|more value do we need|remaining distance|distance to a|deficit"
+            r"|still have to land|gap to a|gap against|short of the", q):
         plan["shape"] = "gap_to_threshold"
         plan["threshold"] = mine_threshold(q)
         if not client or plan["threshold"] is None:
@@ -712,7 +756,9 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     # carries a contrast connector.
     if _has(_AWARDED, q) and _has(_BILLED, q) and \
             _has(r"between|versus|\bvs\.?\b|against|compar|difference|gap|delta"
-                 r"|variance|shortfall|unbilled|above what|net of", q):
+                 r"|variance|shortfall|unbilled|above what|net of|net off|exceed"
+                 r"|\bminus\b|\bless\b|subtract|has not been invoiced|not been billed"
+                 r"|remains|what remains", q):
         plan["shape"] = "unbilled_gap"
         if not client or weak_client:
             plan["confidence"] = 0.0 if not client else 0.5
@@ -739,14 +785,16 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
 
     # 7c. one side of the ledger on its own, with nothing to subtract it from.
     # Reached only when no gap wording fired above.
-    if _has(r"\btotal\b|\bhow much\b|\baggregate\b|\bsum\b", q) and \
-            _has(r"invoiced|billed|raised (?:in )?invoices", q) and not _has(_OWED, q):
+    if _has(r"\btotal\b|\bhow much\b|\baggregate\b|\bsum\b|\bgross\b", q) and \
+            _has(r"invoiced|billed|invoices raised|raised on|invoices", q) and \
+            not _has(_OWED, q):
         plan["shape"] = "invoiced_total"
         if not client:
             plan["confidence"] = 0.0
         return plan
-    if _has(r"\btotal\b|\bhow much\b|\baggregate\b|\bsum\b", q) and \
-            _has(r"received|collected|receipts|paid to us|cleared", q) and not _has(_OWED, q):
+    if _has(r"\btotal\b|\bhow much\b|\baggregate\b|\bsum\b|\bgross\b", q) and \
+            _has(r"received|collected|receipts|paid us|paid to us|cleared"
+                 r"|money has come in|cash .{0,20}paid", q) and not _has(_OWED, q):
         plan["shape"] = "received_total"
         if not client:
             plan["confidence"] = 0.0
@@ -773,9 +821,11 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
         return plan
 
     # 10. rank gap: largest minus second largest.
-    if _has(r"largest|biggest|highest|top finished|top completed", q) and \
-            _has(r"second|2nd|next one down|next largest|next biggest|runner[-\s]?up"
-                 r"|the subsequent one|next completed|the one just behind|beats the", q):
+    if (_has(r"top two|first (?:and|to) second|two largest|two biggest|top-two", q) or
+            (_has(r"largest|biggest|highest|top finished|top completed|top one|top work", q) and
+             _has(r"second|2nd|next one down|next largest|next biggest|runner[-\s]?up"
+                  r"|the subsequent one|next completed|the one just behind|beats the"
+                  r"|the one below|one below it|next one|below it", q))):
         plan["shape"] = "rank_value"
         if not client or weak_client:
             plan["confidence"] = 0.0 if not client else 0.5
@@ -785,8 +835,9 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     # a credential date ("PMP issued March 10, 2021") cannot be read as the year
     # being asked about -- those questions name a person and say "led ... after".
     if len(years) == 1 and not person and \
-            _has(r"\bin\b|\bduring\b|\bfor\b", q) and \
-            _has(r"completed work|work completed|delivered|completion|value of work", q):
+            _has(r"completed work|work completed|completed value|delivered|completion"
+                 r"|value of work|hand(?:ed)? over|handover|close[d]? out|finished"
+                 r"|deliver(?:y|ed)|total(?:led)?|figure", q):
         plan["shape"] = "year_total"
         plan["years"] = years
         if not client:
