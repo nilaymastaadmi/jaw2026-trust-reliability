@@ -167,7 +167,7 @@ def build(verbose=True):
               f"INR {sum(a['cost'] for a in fin['assets'])/1e7:,.2f} Cr at cost")
         print(f"[finance] boq          : {len(fin['boq'])} contracts "
               f"({', '.join(str(v['pkg']) for v in fin['boq'].values())})")
-        print(f"[finance] -> work/finance.json  (NOT wired into the answer path)")
+        print(f"[finance] -> work/finance.json")
     return fin
 
 

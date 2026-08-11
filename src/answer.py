@@ -30,7 +30,20 @@ def load_questions(path):
     a loader crash at 3 PM costs more than any single question. Handles a
     top-level list, several envelope keys, JSONL, and id/text field aliases.
     """
-    text = Path(path).read_text(encoding="utf-8").strip()
+    # utf-8-sig first: a JSON file exported from Excel or a Windows tool carries
+    # a byte-order mark, and json.loads raises "Unexpected UTF-8 BOM" on it --
+    # which would take down the whole run before a single question is read.
+    # utf-8-sig is identical to utf-8 when there is no mark. UTF-16 and latin-1
+    # follow, so an unreadable byte costs one character rather than 300 answers.
+    raw_bytes = Path(path).read_bytes()
+    for enc in ("utf-8-sig", "utf-16", "latin-1"):
+        try:
+            text = raw_bytes.decode(enc).strip()
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        text = raw_bytes.decode("utf-8", errors="replace").strip()
     try:
         raw = json.loads(text)
     except json.JSONDecodeError:                       # JSONL

@@ -6,8 +6,20 @@ reports no error while doing it.  layout=True does not fix it.
 """
 import csv
 import json
+import sys
 import warnings
 from pathlib import Path
+
+# The corpus is full of em dashes and rupee signs, and so is the triage output.
+# On a console that is not UTF-8 -- the Windows default -- printing one raises
+# UnicodeEncodeError and takes the run down AFTER the answers were computed.
+# Every entry point imports this module, so reconfiguring here covers all of
+# them rather than asking whoever runs the harness to set PYTHONIOENCODING.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:                                   # not a real stream
+        pass
 
 warnings.filterwarnings("ignore")
 import pymupdf
