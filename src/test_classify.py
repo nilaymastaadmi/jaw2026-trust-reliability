@@ -38,8 +38,13 @@ README_GOLDS = {
 }
 
 CENSUS = {
-    "category_delta": 61, "outstanding_balance": 25, "collection_pct": 24,
-    "unbilled_gap": 24, "date_span": 24, "avg_work_size": 24, "year_delta": 24,
+    # outstanding_balance 25 -> 24 and unbilled_gap 24 -> 25: HV-IC-0381 asks
+    # for "the outstanding balance against the total contract value", which is
+    # the unbilled gap. The census is what caught it -- outstanding_balance held
+    # 25 questions across only 24 clients, Arunodaya Infrastructure twice. It is
+    # now one question per receivables client.
+    "category_delta": 61, "outstanding_balance": 24, "collection_pct": 24,
+    "unbilled_gap": 25, "date_span": 24, "avg_work_size": 24, "year_delta": 24,
     "exclusion_aggregate": 21, "threshold_aggregate": 21, "mean_median_gap": 19,
     "hop_aggregate": 18, "rank_value": 16, "temporal_chain": 11,
     "distinct_count": 9, "referenced_share": 7, "gap_to_threshold": 3,
