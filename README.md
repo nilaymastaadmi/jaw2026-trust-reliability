@@ -27,17 +27,27 @@ difference, mean and date span is computed in Python over exactly-parsed
 integers. The classifier chooses a query shape and extracts its parameters; it
 never produces a number.
 
-## Reproduce
+## Run the harness
+
+One command, from a clean checkout, against any question file:
 
 ```bash
 git clone https://github.com/satvikGIKA/BITS-Hackathon-Dataset.git dataset
 pip install pymupdf openpyxl
 
-python src/build_db.py                  # 687 docs  -> work/db.json     (~2 min)
-python src/parse_workbooks.py           # 9 xlsx     -> work/finance.json
-python src/answer.py --questions dataset/questions.json \
-                     --out work/submission.csv --force
+python src/answer.py --questions <questions.json> --out answers.csv --force
 ```
+
+`answer.py` builds `work/db.json` and `work/finance.json` itself if they are not
+already present, so no prior step is required. The question loader accepts a
+top-level list, several envelope keys, JSONL, and the common `qid`/`id`/
+`question_id` field aliases. Every question is answered inside its own
+try/except: an unparseable one is logged to stderr and given a corpus-typical
+value of the right unit rather than taking the run down.
+
+**Every question always receives a number.** A blank scores zero, so the
+fallback ladder walks from the routed shape, to the nearest shape of the same
+unit, to a corpus-typical value.
 
 ## Verify
 
@@ -74,11 +84,29 @@ starts or stops firing.
 | `src/reconcile.py` | diff harness for an independent second extraction |
 | `src/test_*.py` | verification suite |
 
-## How the questions were routed
+## Answering questions this harness has not seen
 
-The 333 questions fall into 18 families that are heavily paraphrased but
-structurally uniform. Routing is by **family signature** rather than by first
-matching phrase:
+The released set is frozen, and the classifier was originally tuned to it. For
+the tie-break it was reworked so that nothing depends on *which* questions
+arrive:
+
+- **Every executor shape is reachable.** Five — `role_split`,
+  `doc_filtered_aggregate`, `year_total`, `invoiced_total`, `received_total` —
+  existed with no rule able to select them, because the released set never asks
+  for them. A question that does would have been missed outright. `test_classify.py`
+  now probes all of them.
+- **Corpus facts are read from the corpus.** Credential issue dates, state
+  names, gradings and contractor roles are derived from `db.json` at run time
+  rather than written into the router, so none of them silently expires.
+- **The family census reports rather than fails** on a question file it does not
+  recognise. The gold, coverage, package-agreement and exclusion checks are
+  question-set independent and always assert.
+- **`doc_filtered_aggregate` is wired up** even though the grading family was
+  withdrawn from the released set. The shape and the parsed gradings both exist;
+  if a hidden set reinstates it, it is answerable rather than a guaranteed miss.
+
+Routing is by **family signature** rather than by first matching phrase, which
+is what makes it transfer — the signatures are structural, not phrase-matching:
 
 - `answer_type` partitions hard. Every `days` question is a date span, every
   `percent` question is one of two shapes, every `count` question one of two.

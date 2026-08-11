@@ -38,6 +38,7 @@ class DB:
         # therefore run over the union, or that question resolves to a
         # same-named sibling and returns a confident wrong number.
         self.all_names = sorted(set(self.clients) | set(self.receivables))
+        self._states = self._creddates = self._gradings = self._roles = None
         self._by_key = {w["work_key"]: w for w in self.works}
         # package number -> work. Unique across all 155, so it identifies a work
         # outright regardless of how the name around it is spelled or ordered.
@@ -121,6 +122,61 @@ class DB:
     def all_clients(self):
         """Every client nameable by a question: works portfolio plus receivables."""
         return self.all_names
+
+    # ------------------------------------------------- corpus-derived vocabulary
+    # Read off the database rather than written down, so the router keeps working
+    # if the corpus changes underneath it. A hidden question set re-run against a
+    # different estate would otherwise inherit constants that were only ever true
+    # of this one.
+
+    def state_tokens(self):
+        """State names, harvested from the work titles that carry them.
+
+        Every work is titled "<description> - <State> Pkg-<n>", so the words
+        sitting between the dash and the package number are the state
+        vocabulary. A state name alone never identifies a client -- twelve of
+        the clients differ from a sibling only by state -- so the resolver
+        needs to know which words those are.
+        """
+        if self._states is None:
+            out = set()
+            for w in self.works:
+                m = re.search(r"[—–-]\s*([A-Za-z ]+?)\s*Pkg", w.get("work") or "")
+                if m:
+                    out.update(t.lower() for t in m.group(1).split() if len(t) > 2)
+            self._states = out
+        return self._states
+
+    def credential_dates(self):
+        """{credential name (lower) -> issue date} for credentials issued on one date.
+
+        Every PMP in the corpus is issued 2021-03-10 and every Six Sigma Black
+        Belt 2023-01-01, which lets a date-span question be answered from the
+        credential NAME without resolving the holder -- worth having, since a
+        third of those questions name the holder by first name only.
+        """
+        if self._creddates is None:
+            seen = {}
+            for p in self.persons.values():
+                for c in p.get("credentials", []):
+                    if c.get("credential") and c.get("issued"):
+                        seen.setdefault(c["credential"].lower(), set()).add(c["issued"])
+            self._creddates = {k: sorted(v)[0] for k, v in seen.items() if len(v) == 1}
+        return self._creddates
+
+    def gradings(self):
+        """The distinct written gradings that appear on the certificates."""
+        if self._gradings is None:
+            self._gradings = sorted({(w.get("grading") or "").strip()
+                                     for w in self.works if w.get("grading")})
+        return self._gradings
+
+    def roles(self):
+        """The distinct contractor roles recorded against works."""
+        if self._roles is None:
+            self._roles = sorted({(w.get("role") or "").strip()
+                                  for w in self.works if w.get("role")})
+        return self._roles
 
     # ---------------------------------------------------------- selection
     def portfolio(self, client):

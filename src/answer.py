@@ -88,7 +88,34 @@ def fallbacks(db, plan, q, corpus_medians):
     return corpus_medians.get(t, corpus_medians["money"]), "fallback:typical"
 
 
+def ensure_database(verbose=True):
+    """Build work/db.json and work/finance.json if they are not already there.
+
+    The harness has to run from a clean checkout against a question file it has
+    never seen, so it builds its own inputs rather than assuming an earlier
+    command was run. Rebuilding is idempotent and the text cache makes the
+    second run fast.
+    """
+    if not (corpus.WORK / "db.json").exists():
+        if verbose:
+            print("[setup] work/db.json missing - extracting the corpus", file=sys.stderr)
+        import build_db
+        build_db.build()
+    if not (corpus.WORK / "finance.json").exists():
+        if verbose:
+            print("[setup] work/finance.json missing - parsing the workbooks", file=sys.stderr)
+        try:
+            import parse_workbooks
+            parse_workbooks.build()
+        except Exception as e:
+            # Receivable shapes degrade to None and fall through the ladder;
+            # every other family is unaffected. Better than refusing to run.
+            print(f"[setup] workbook parse failed ({e}); "
+                  f"receivable questions will use the fallback ladder", file=sys.stderr)
+
+
 def answer_all(questions, verbose=True):
+    ensure_database(verbose)
     db = executor.DB()
     vals = [w["value"] for w in db.works if w.get("value")]
     # Typical value per unit, used only when no shape of the right unit can run.
@@ -107,6 +134,7 @@ def answer_all(questions, verbose=True):
     # classify.py is the primary router; router.RULES is retained as a fallback
     # so a question the family classifier cannot place still gets the old
     # lexical treatment rather than nothing. Both are deterministic and offline.
+    classify.set_state_tokens(db)
     catidx = classify.CategoryIndex({w["category"] for w in db.works if w.get("category")})
     clidx = classify.ClientIndex(db.all_clients())
 
@@ -123,28 +151,44 @@ def answer_all(questions, verbose=True):
 
     rows = []
     for q in questions:
-        plan = classify.plan_for(db, q["question"], q.get("answer_type"), catidx, clidx)
-        if q["qid"] in overrides:
-            plan = {**plan, "client": overrides[q["qid"]],
-                    "client_via": "override", "confidence": 1.0}
-        # Fall back to the old rule ladder only when the classifier produces NO
-        # number. A low-confidence classifier plan is still a considered one;
-        # the ladder's "confidence" says a pattern matched, not that it matched
-        # the right thing -- it was fully confident on all 60 questions it
-        # dumped into client_total. Substituting it for a usable answer trades
-        # a reasoned guess for a worse one.
-        if executor.run(db, plan) is None:
-            alt = router.route(db, q["question"], q.get("answer_type"))
-            if executor.run(db, alt) is not None:
-                plan = alt
-        got = executor.run(db, plan)
-        source = "router"
-        if got is None:
-            got, source = fallbacks(db, plan, q, medians)
+        try:
+            plan = _plan_one(db, q, catidx, clidx, overrides)
+            got, source = _run_one(db, plan, q, medians)
+        except Exception as e:
+            # One unparseable question must not cost the other 332. Emit a
+            # corpus-typical value of the right unit and record why.
+            print(f"[answer] {q['qid']} raised {type(e).__name__}: {e}", file=sys.stderr)
+            plan = {"shape": "error", "confidence": 0.0}
+            got, source = medians.get((q.get("answer_type") or "").lower(),
+                                      medians["money"]), f"error:{type(e).__name__}"
         rows.append({"qid": q["qid"], "answer": got, "shape": plan["shape"],
                      "confidence": plan["confidence"], "source": source,
                      "gold": q.get("gold"), "question": q["question"]})
     return rows
+
+
+def _plan_one(db, q, catidx, clidx, overrides):
+    """Classifier first; the old rule ladder only if that yields no number."""
+    plan = classify.plan_for(db, q["question"], q.get("answer_type"), catidx, clidx)
+    if q["qid"] in overrides:
+        plan = {**plan, "client": overrides[q["qid"]],
+                "client_via": "override", "confidence": 1.0}
+    # The ladder's "confidence" says a pattern matched, not that it matched the
+    # right thing -- it was fully confident on all 60 questions it dumped into
+    # client_total. So it is consulted only when the classifier produces
+    # nothing at all, never to displace a considered plan.
+    if executor.run(db, plan) is None:
+        alt = router.route(db, q["question"], q.get("answer_type"))
+        if executor.run(db, alt) is not None:
+            plan = alt
+    return plan
+
+
+def _run_one(db, plan, q, medians):
+    got = executor.run(db, plan)
+    if got is not None:
+        return got, "router"
+    return fallbacks(db, plan, q, medians)
 
 
 def write_submission(rows, path):

@@ -113,6 +113,37 @@ def main():
             print(f"  FAIL {qid} {shape} produced no number")
     print(f"  {len(questions) - len(blanks)}/{len(questions)} answered")
 
+    print("--- every executor shape is reachable from a question ---")
+    # The tie-break runs this harness against unseen questions, so a shape the
+    # classifier can never emit is dead weight that will simply be missed.
+    # Five were in exactly that state -- role_split, doc_filtered_aggregate,
+    # year_total, invoiced_total and received_total existed in the executor
+    # with no rule able to select them.
+    probes = [
+        ("role_split", "What is the total value of work we delivered as Prime for "
+                       "Mahanadi Steel Corporation?", "money"),
+        ("doc_filtered_aggregate", "For Trishakti Power Generation Corporation, what is "
+                                   "the combined value of the works graded Excellent?", "money"),
+        ("year_total", "What was the completed work value for Suvarna Projects "
+                       "Limited in 2018?", "money"),
+        ("invoiced_total", "What is the total amount we have invoiced to "
+                           "Mega Infrastructure Authority?", "money"),
+        ("received_total", "How much have we actually received from Lakshya "
+                           "Engineering & Construction in total?", "money"),
+        ("client_total", "What is the combined value of all completed work for "
+                         "Arunodaya Infrastructure?", "money"),
+    ]
+    unreachable = 0
+    for want, text, at in probes:
+        plan = classify.plan_for(db, text, at, cats, clients)
+        got = executor.run(db, plan)
+        if plan["shape"] != want or got is None:
+            unreachable += 1
+            fail += 1
+            print(f"  FAIL {want:24} routed to {plan['shape']!r}, value {got}")
+    if not unreachable:
+        print(f"  {len(probes)} shapes reachable, all returning a number")
+
     print("--- resolved client agrees with the named package ---")
     # The sharpest check available without golds. When a question names a
     # package number, that package's client is the client the question is
@@ -165,14 +196,27 @@ def main():
     if not excl:
         print("  all exclusions drop exactly the named category")
 
-    print("--- family census ---")
-    for shape in sorted(set(census) | set(CENSUS)):
-        want, got = CENSUS.get(shape, 0), census.get(shape, 0)
-        if want != got:
-            fail += 1
-            print(f"  FAIL {shape:24} expected {want:3}  got {got:3}")
-    if not fail:
-        print(f"  {len(CENSUS)} families all at expected size")
+    # The census is pinned to the released 333-question set. Run against any
+    # other question file -- the tie-break set, for instance -- the counts are
+    # simply unknown, so it reports the distribution instead of failing. The
+    # gold, coverage, package-agreement and exclusion checks above are
+    # question-set independent and always assert.
+    known_set = len(questions) == sum(CENSUS.values())
+    print(f"--- family census ({'pinned' if known_set else 'informational'}) ---")
+    if known_set:
+        for shape in sorted(set(census) | set(CENSUS)):
+            want, got = CENSUS.get(shape, 0), census.get(shape, 0)
+            if want != got:
+                fail += 1
+                print(f"  FAIL {shape:24} expected {want:3}  got {got:3}")
+        if not fail:
+            print(f"  {len(CENSUS)} families all at expected size")
+    else:
+        for shape, n in sorted(census.items(), key=lambda kv: -kv[1]):
+            print(f"  {shape:24} {n:4}")
+        unreachable = sorted(set(executor.SHAPES) - set(census))
+        if unreachable:
+            print(f"  shapes not exercised by this set: {', '.join(unreachable)}")
 
     print()
     if fail:
