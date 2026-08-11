@@ -1,9 +1,10 @@
-"""questions.json -> submission.jsonl, end to end.
+"""questions.json -> submission.csv, end to end.
 
-Answering policy: never leave a question blank.  Under the scorer's bands a
-blank scores 0, a wrong guess scores 0, and a rough guess can score 0.3 -- so
-emitting a number is free upside on every question.  The fallback ladder is
-logged per question so triage knows what was computed vs guessed.
+Answering policy: never leave a question blank. Scoring is proportional --
+score = max(0, 1 - |got - gold| / gold) -- so a blank scores 0 while even a
+rough number of the right magnitude keeps most of its credit. Every question
+gets a number, and every fallback is recorded so triage can separate what was
+computed from what was estimated.
 """
 import argparse
 import csv
@@ -87,7 +88,7 @@ def fallbacks(db, plan, q, corpus_medians):
     return corpus_medians.get(t, corpus_medians["money"]), "fallback:typical"
 
 
-def answer_all(questions, use_llm=False, verbose=True):
+def answer_all(questions, verbose=True):
     db = executor.DB()
     vals = [w["value"] for w in db.works if w.get("value")]
     # Typical value per unit, used only when no shape of the right unit can run.
@@ -102,15 +103,6 @@ def answer_all(questions, use_llm=False, verbose=True):
         "days": 900,
         "percent": 50.0,
     }
-
-    llm_plans = {}
-    if use_llm and router.llm_available():
-        try:
-            llm_plans = router.route_llm(questions)
-            if verbose:
-                print(f"[router] LLM classified {len(llm_plans)} questions")
-        except Exception as e:
-            print(f"[router] LLM backend failed ({e}); deterministic only")
 
     # classify.py is the primary router; router.RULES is retained as a fallback
     # so a question the family classifier cannot place still gets the old
@@ -145,10 +137,6 @@ def answer_all(questions, use_llm=False, verbose=True):
             alt = router.route(db, q["question"], q.get("answer_type"))
             if executor.run(db, alt) is not None:
                 plan = alt
-        # LLM output only overrides where the deterministic router is unsure
-        if q["qid"] in llm_plans and plan["confidence"] < 1.0:
-            merged = {k: v for k, v in llm_plans[q["qid"]].items() if v is not None}
-            plan = {**plan, **merged, "confidence": 1.0}
         got = executor.run(db, plan)
         source = "router"
         if got is None:
@@ -210,14 +198,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--questions", default=str(corpus.DATA / "sample_questions.json"))
     ap.add_argument("--out", default=str(corpus.WORK / "submission.csv"))
-    ap.add_argument("--llm", action="store_true", help="escalate low-confidence to the LLM router")
     ap.add_argument("--per-question", action="store_true")
     ap.add_argument("--force", action="store_true",
                     help="allow overwriting a larger existing submission")
     a = ap.parse_args()
 
     questions = load_questions(a.questions)
-    rows = answer_all(questions, use_llm=a.llm)
+    rows = answer_all(questions)
     corpus.WORK.mkdir(parents=True, exist_ok=True)
 
     # Refuse to shrink an existing submission. Running this with the default
