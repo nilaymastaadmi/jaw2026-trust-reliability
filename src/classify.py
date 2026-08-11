@@ -713,6 +713,58 @@ _ESTATE = (r"across (?:all|every|the whole|the entire|our)\b|all clients|every c
            r"|of (?:our |the )?155\b|nationally\b|group total|book total|total book")
 
 
+# ------------------------------------------------------- answer_type recovery
+
+# `answer_type` partitions the question set before any lexical test runs, which
+# is what makes the classifier tractable -- and it arrives in the question file
+# rather than being derived. A hidden set that omits the field, or spells it
+# differently, would send every percent and count question down the money path
+# and answer "what proportion carry a reference letter" with a rupee total.
+# Measured: the released set scores 80.480 with the field removed. So it is
+# recovered from the question when it is missing, never when it is present.
+# A span that STARTS at a credential. Every days question in the set measures
+# from an issue date to a completion, and half of them never say "days":
+# "the exact interval from Chandan Banerjee's March 10, 2021 PMP", "the actual
+# count from that certification date to the final completion mark".
+_SPAN_FROM = (r"(?:from|since|between)\s+[^?]{0,60}?"
+              r"(?:issue|issued|issuance|credential|certification|certified"
+              r"|\bPMP\b|\bbelt\b|\bASQ\b|PMI-\d+|6S-\d+)")
+_SPAN_WORD = r"\bcount\b|\bspan\b|interval|\bgap\b|stretch|distance|duration|timeline"
+# Money wording strong enough to override an interval reading: a question about
+# what a person delivered AFTER their credential says all of the same things.
+_IS_MONEY = (r"combined value|total value|aggregate|\bworth\b|sum of the values"
+             r"|\brupees?\b|\bcrores?\b|\blakhs?\b|value of (?:the )?(?:works?|projects?)")
+
+_TYPE_CUES = [
+    ("days", r"how many days|number of days|\bdays?\b|how long|elapsed"
+             r"|(?:" + _SPAN_WORD + r")[^?]{0,80}?(?:" + _SPAN_FROM + r")"
+             r"|(?:" + _SPAN_FROM + r")[^?]{0,80}?(?:" + _SPAN_WORD + r")"
+             r"|(?:count|span|interval|gap|stretch)\s+to\s+[^?]{0,30}complet"),
+    ("percent", r"percent|percentage|\bpct\b|%|what (?:proportion|fraction|share)"
+                r"|out[- ]of[- ](?:one hundred|a hundred|100)|out of (?:one hundred|a hundred|100)"
+                r"|expressed out of|as a share of|\bshare of\b|proportion of"),
+    # `tally` is deliberately absent: "the full tally of every completed scope
+    # she's delivered" is a rupee total, and it reads exactly like a count.
+    ("count", r"how many|number of|\bcount\b|how much of (?:our|the) \w+ (?:is|are)\b"
+              r"|total number|how many separate|number of distinct"),
+]
+
+def infer_answer_type(question):
+    """The unit the answer must be in, read off the question. Money by default."""
+    for name, pat in _TYPE_CUES:
+        if not re.search(pat, question, re.I):
+            continue
+        # "how many rupees", "how many crore" is a money question wearing a
+        # count question's clothes; and a question naming a credential and
+        # asking for a COMBINED VALUE after it is a sum, not a span.
+        if name in ("count", "days") and re.search(_IS_MONEY, question, re.I) \
+                and not re.search(r"how many days|number of days|\bdays?\b|how long"
+                                  r"|elapsed", question, re.I):
+            return "money"
+        return name
+    return "money"
+
+
 def _negated(term, q):
     """Is every mention of `term` there only to rule it out?
 

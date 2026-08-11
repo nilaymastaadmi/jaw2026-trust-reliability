@@ -218,6 +218,21 @@ def main():
         if unreachable:
             print(f"  shapes not exercised by this set: {', '.join(unreachable)}")
 
+    # answer_type is a hard partition, and it arrives as an input FIELD. A
+    # hidden set that omits it must not send every percent and count question
+    # down the money path, so it is recoverable from the question itself.
+    # Asserted over every question the organisers have published.
+    wrong = [q for q in questions
+             if q.get("answer_type")
+             and classify.infer_answer_type(q["question"]) != q["answer_type"].lower()]
+    print(f"--- answer_type recovered from the question alone ---")
+    print(f"  {len(questions) - len(wrong)}/{len(questions)} correct")
+    for q in wrong[:5]:
+        print(f"  FAIL {q['qid']}  want {q['answer_type']}  "
+              f"got {classify.infer_answer_type(q['question'])}")
+    if wrong:
+        fail += len(wrong)
+
     print()
     if fail:
         print(f"FAILURES: {fail}")

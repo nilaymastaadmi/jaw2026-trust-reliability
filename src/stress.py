@@ -376,6 +376,16 @@ def main():
     if tot_n:
         print(f"\n  {'OVERALL':11s} {tot_n:7d} {tot_s / tot_n * 100:7.2f}%")
 
+    # Not a rewrite of the question -- a rewrite of the FILE. `answer_type`
+    # partitions the set before any lexical test runs, and it arrives as an
+    # input field rather than being derived. A hidden set that omits it, or
+    # spells it differently, must not cost twenty points.
+    stripped = [{**q, "answer_type": None} for q in questions]
+    out = answer_mod.answer_all(stripped, verbose=False)
+    ss = [score_one(gold[q["qid"]], g["answer"]) for q, g in zip(stripped, out)]
+    print(f"\n  answer_type field removed entirely: {sum(ss) / len(ss) * 100:7.2f}%"
+          f"   ({sum(1 for x in ss if x < 0.9995)} of {len(ss)} moved)")
+
     if a.show:
         print(f"\n--- every question the `{a.show}` rewrite broke ---")
         for s, q, got, g in sorted(rows.get(a.show, []), key=lambda r: r[0]):

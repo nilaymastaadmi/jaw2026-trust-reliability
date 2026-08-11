@@ -56,8 +56,14 @@ def load_questions(path):
         if qid is None:
             print(f"[load] warning: entry {i} has no qid; skipping", file=sys.stderr)
             continue
+        at = q.get("answer_type") or q.get("type") or q.get("unit")
+        if not at:
+            # Recovered, not guessed at: the unit is legible in the question and
+            # a missing field would otherwise answer every percent and count
+            # question with a rupee figure. See classify.infer_answer_type.
+            at = classify.infer_answer_type(question)
         out.append({"qid": str(qid), "question": question, "gold": gold,
-                    "shape": q.get("shape"), "answer_type": q.get("answer_type")})
+                    "shape": q.get("shape"), "answer_type": at})
     if not out:
         raise SystemExit(f"[load] no questions parsed from {path} -- inspect the file")
     print(f"[load] {len(out)} questions from {Path(path).name}")
@@ -158,6 +164,8 @@ def answer_all(questions, verbose=True):
 
     rows = []
     for q in questions:
+        if not q.get("answer_type"):
+            q = {**q, "answer_type": classify.infer_answer_type(q.get("question") or "")}
         try:
             plan = _plan_one(db, q, catidx, clidx, overrides)
             got, source = _run_one(db, plan, q, medians, gr)
