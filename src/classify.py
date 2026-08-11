@@ -438,10 +438,35 @@ class CategoryIndex:
 # ---------------------------------------------------------------- misc miners
 
 def mine_person(db, q):
+    """The person the question is about, or None when it does not fix one.
+
+    A third of these questions name the holder by part of their name --
+    "Sunita's PMP issued 2021-03-10", "PMP; Rohit, ... categories he has
+    concluded". `mine_after` was built so that the credential DATE need not
+    depend on resolving them, because credentials are issued in cohorts; but
+    temporal_chain and distinct_count are about the person's own works and
+    cannot be answered without one.
+
+    A part-name is accepted only when it belongs to exactly one of the 39. Ten
+    first names are shared -- three people are called Meera, three Farhan -- and
+    picking one of those is a confident wrong number where refusing leaves the
+    fallback ladder a corpus-typical guess.
+    """
     ql = q.lower()
     hits = [n for n in db.persons if n.lower() in ql]
     if hits:
         return max(hits, key=len)
+    for part in (0, -1):                       # first name, then surname
+        owners = {}
+        for n in db.persons:
+            bits = n.split()
+            if len(bits) > 1:
+                owners.setdefault(bits[part].lower(), []).append(n)
+        found = [names[0] for tok, names in owners.items()
+                 if len(names) == 1 and len(tok) > 3
+                 and re.search(r"\b" + re.escape(tok) + r"\b", ql)]
+        if len(found) == 1:
+            return found[0]
     return None
 
 
@@ -465,8 +490,56 @@ def mine_years(q):
     return sorted({int(y) for y in re.findall(r"\b(?:19|20)\d{2}\b", q)})
 
 
+# A figure the asker attributes to their own memory is not a bar the portfolio
+# is being measured against -- it is the number they expect the answer to be,
+# and the organisers' hard tier is built on exactly that ("a figure stated in
+# the question that is wrong, where the correct answer contradicts the asker").
+# Read as a threshold it changes the SHAPE: "the average size of all work we've
+# finished for them, and I need that by 2 PM -- I have about 14 crore in my
+# head" stops being an average and becomes a sum of works above 14 crore.
+_BELIEF = (r"in my head|off the top of my head|my memory|half[- ]remember\w*"
+           r"|i (?:think|recall|remember|believe|reckon|guess)|i'?m fairly certain"
+           r"|i have about|i've got about|feels? like|somewhere around|give or take"
+           r"|ballpark|in mind|i'?m recalling|from memory|as i remember")
+
+
+# Wording that puts a figure forward as a BAR, as against merely mentioning it.
+_BAR = (r"clear(?:s|ing)? the|clearing|crossing|cross(?:ed)? the|hitting|hit the"
+        r"|exceed\w*|meet(?:ing)? or exceed|at or (?:over|above)|above|over the"
+        r"|or higher|or more|or bigger|or larger|and above|and up|no less than"
+        r"|at least|upwards of|valued at|cutoff|threshold|mark\b|limit|bar\b"
+        r"|credential|pre-?qualification|qualif\w*|requirement|minimum|floor")
+
+_MONEY_SPAN = re.compile(
+    r"(?:INR|Rs\.?|\u20b9)?\s*[\d][\d,]*(?:\.\d+)?\s*(?:Cr\b|Crores?\b|Lakhs?\b|Lacs?\b)"
+    r"|(?:[a-z]+[\s-]){1,4}?(?:crore|lakh|lac)s?\b"
+    r"|(?<![\d.,])(?:\d{1,3}(?:,\d{2,3})+|\d{7,})(?![\d.,])", re.I)
+
+
 def mine_threshold(q):
-    return normalize.threshold_from_text(q)
+    """The rupee bar the question sets, ignoring figures it merely mentions.
+
+    Two figures can sit in one sentence -- "anything hitting fifteen crore or
+    more; I have about 14 crore in my head" -- and only one of them is the bar.
+    Candidates inside a clause about what someone RECALLS are dropped, and of
+    what is left the one standing next to bar wording wins. Blanking the text
+    and re-parsing cannot do this: the two clauses overlap.
+    """
+    cands = []
+    beliefs = [(max(0, m.start() - 20), m.end() + 45)
+               for m in re.finditer(_BELIEF, q, re.I)]
+    for m in _MONEY_SPAN.finditer(q):
+        if any(lo <= m.start() < hi for lo, hi in beliefs):
+            continue
+        v = normalize.threshold_from_text(m.group(0))
+        if v is None or v < 10 ** 5:
+            continue
+        near = bool(re.search(_BAR, q[max(0, m.start() - 45):m.end() + 45], re.I))
+        cands.append((not near, m.start(), v))
+    if not cands:
+        return None
+    cands.sort()
+    return cands[0][2]
 
 
 def mine_credential(q):
@@ -524,6 +597,22 @@ def resolve_work(db, q, person=None, cutoff=0.75):
     # built on.
     if not mine_credential(q):
         return None
+    # A work named without its package number -- "Rahul Menon's PMP for the
+    # Highway Tunnel". Two of the title's three content words are present, which
+    # is below the loose-match bar for good reason, but the title MINUS its
+    # "-- State Pkg-N" tail is quoted in full and is unique across the 155.
+    based = []
+    for w in db.works:
+        base = re.sub(r"\s*[\u2014\u2013-]\s*[A-Za-z ]+Pkg[\s\-_]*\d+\s*$", "",
+                      w.get("work") or "").strip()
+        if len(base) >= 10 and len(base.split()) >= 2 and \
+                re.search(r"\b" + re.escape(base) + r"\b", q, re.I):
+            based.append((len(base), base, w))
+    if based:
+        longest = max(b[0] for b in based)
+        top = [w for ln, _, w in based if ln == longest]
+        if len(top) == 1:
+            return top[0]
     qn = set(norm_text(q).split())
     pool = db.led_by(person) if person else []
     if not pool:

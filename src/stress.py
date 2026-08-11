@@ -201,10 +201,111 @@ def _rw_shorthand(q, rng, db):
     return None
 
 
+_ONES = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six",
+         7: "seven", 8: "eight", 9: "nine", 10: "ten", 11: "eleven",
+         12: "twelve", 13: "thirteen", 14: "fourteen", 15: "fifteen",
+         16: "sixteen", 17: "seventeen", 18: "eighteen", 19: "nineteen"}
+_TENS = {2: "twenty", 3: "thirty", 4: "forty", 5: "fifty", 6: "sixty",
+         7: "seventy", 8: "eighty", 9: "ninety"}
+
+
+def _in_words(k):
+    if k in _ONES:
+        return _ONES[k]
+    if k % 10 == 0 and k // 10 in _TENS:
+        return _TENS[k // 10]
+    if 20 < k < 100 and k // 10 in _TENS:
+        return _TENS[k // 10] + "-" + _ONES[k % 10]
+    return None
+
+
+def _rw_numword(q, rng, db):
+    """"26 Cr" -> "twenty-six crore". The set writes thresholds both ways."""
+    def sub(m):
+        w = _in_words(int(m.group(1)))
+        return m.group(0) if not w else f"{w} crore"
+    out = re.sub(r"\b(?:INR\s*|Rs\.?\s*)?(\d{1,2})\s*(?:Cr\b|Crores?\b)", sub, q,
+                 flags=re.I)
+    return out if out != q else None
+
+
+def _rw_punct(q, rng, db):
+    """The same words, punctuated by someone else."""
+    out = q.replace("\u2014", ",").replace("\u2013", ",").replace(";", ",")
+    out = re.sub(r",\s*,", ",", out)
+    out = re.sub(r"\s+,", ",", out)
+    return out if out != q else None
+
+
+def _rw_statement(q, rng, db):
+    """Asked as an instruction rather than a question."""
+    body = re.sub(r"^(?:could you|can you|would you|please|so|and|but)\s+", "", q,
+                  flags=re.I)
+    body = re.sub(r"[?]\s*$", ".", body.strip())
+    return "Need this for the bid pack: " + body[0].lower() + body[1:]
+
+
+def _rw_decoy(q, rng, db):
+    """A figure the asker believes, which the right answer contradicts.
+
+    Applied only where the question states no rupee figure of its own, so the
+    decoy cannot be mistaken for a threshold the question actually sets.
+    """
+    if re.search(r"\d[\d,]*\s*(?:cr\b|crore|lakh)|\d{2},\d{2}|(?:INR|Rs\.?|\u20b9)\s*\d",
+                 q, re.I):
+        return None
+    if re.search(r"\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven"
+                 r"|twelve|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)"
+                 r"[\s-]*(?:crore|lakh)", q, re.I):
+        return None
+    return q.rstrip(" .?!") + " I have about 14 crore in my head for this, but I doubt it."
+
+
+def _rw_firstname(q, rng, db):
+    """A person named the way a colleague names them, when it stays unambiguous."""
+    first = {}
+    for name in db.persons:
+        first.setdefault(name.split()[0].lower(), []).append(name)
+    for name in sorted(db.persons, key=len, reverse=True):
+        if name.lower() not in q.lower():
+            continue
+        f = name.split()[0]
+        if len(first[f.lower()]) != 1:
+            return None                        # two people share it: ambiguous
+        return re.sub(re.escape(name), f, q, count=1, flags=re.I)
+    return None
+
+
+def _rw_pkgless(q, rng, db):
+    """A work named without its package number, where the title is still unique."""
+    titles = [w["work"] for w in db.works if w.get("work")]
+    for t in sorted(titles, key=len, reverse=True):
+        if t.lower() not in q.lower():
+            continue
+        base = re.sub(r"\s*[\u2014\u2013-]\s*[A-Za-z ]+Pkg[\s\-_]*\d+\s*$", "", t).strip()
+        if base == t or sum(1 for o in titles if o.startswith(base)) != 1:
+            return None                        # dropping it loses the identity
+        return re.sub(re.escape(t), base, q, count=1, flags=re.I)
+    return None
+
+
+def _rw_compose(q, rng, db):
+    """Three rewrites at once, which is how an unseen question actually differs."""
+    out = q
+    for fn in (_rw_synonym, _rw_punct, _rw_trailing, _rw_hurried):
+        got = fn(out, rng, db)
+        if got:
+            out = got
+    return out if out != q else None
+
+
 REWRITES = {
-    "synonym": _rw_synonym, "money": _rw_money, "hurried": _rw_hurried,
-    "formal": _rw_formal, "spoken": _rw_spoken, "buried": _rw_buried,
+    "synonym": _rw_synonym, "money": _rw_money, "numword": _rw_numword,
+    "punct": _rw_punct, "hurried": _rw_hurried, "formal": _rw_formal,
+    "spoken": _rw_spoken, "buried": _rw_buried, "statement": _rw_statement,
     "trailing": _rw_trailing, "sibling": _rw_sibling, "shorthand": _rw_shorthand,
+    "firstname": _rw_firstname, "pkgless": _rw_pkgless, "decoy": _rw_decoy,
+    "compose": _rw_compose,
 }
 
 
