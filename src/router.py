@@ -65,8 +65,14 @@ RULES = [
                      r"\b(?:billed|invoiced)\b"
                      r"|\b(?:billed|invoiced)\b[^.?]{0,60}"
                      r"\b(?:awarded|sanction(?:ed)?|contracted)\b", 3),
+    # rank_value must win over category_delta: "the difference between the
+    # highest and second highest value work" matches both, and category_delta
+    # sits higher in RULES. Guard by excluding rank wording explicitly rather
+    # than reordering, so the v1.4 block stays contiguous and readable.
     ("category_delta", r"\b(?:gap|difference|delta|spread)\b[^.?]{0,60}"
-                       r"\bbetween\b[^.?]{0,60}\b(?:and|versus|vs\.?)\b", 3),
+                       r"\bbetween\b(?![^.?]{0,60}"
+                       r"\b(?:second|2nd|next|runner[-\s]?up|highest|largest|biggest|top)\b)"
+                       r"[^.?]{0,60}\b(?:and|versus|vs\.?)\b", 3),
 
     ("date_span", r"\b(?:how many days|number of days|days (?:passed|between|elapsed)"
                   r"|exact interval|what is the interval|days from)\b", 3),
