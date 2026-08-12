@@ -1187,12 +1187,24 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
                 filters.append(("category", "eq", c))
 
     if fn == "distinct":
-        if re.search(r"client|authorit|department", q, re.I):
+        # `distinct` needs the column whose VALUES are being counted, and the
+        # question always names it -- "how many distinct certification BODIES",
+        # "how many different lead AUDITORS". best_column cannot supply it: the
+        # column wanted here holds strings, which is exactly what that rules
+        # out. Asked of the table already chosen, so a named table keeps its
+        # own columns; the works ladder below is what carries the questions
+        # that name no table at all.
+        named = sch.name_column(entity, q, exclude=selecting) if sch else None
+        if named is not None and entity != "work":
+            field = named
+        elif re.search(r"client|authorit|department", q, re.I):
             entity, field = "work", "client"
         elif re.search(r"categor|type of work|classification", q, re.I):
             entity, field = "work", "category"
         elif re.search(r"state", q, re.I):
             entity, field = "work", "state"
+        elif named is not None:
+            field = named
         else:
             field = "client"
 

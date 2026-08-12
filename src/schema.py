@@ -64,7 +64,12 @@ def _run_in(hay, needle):
 
 
 def _stem(w):
-    for suf in ("ities", "ing", "ies", "ed", "es", "s"):
+    # -ies folds back to -y rather than being cut off, so that a column called
+    # `body` and a question saying "certification bodies" reduce to the same
+    # thing. Cutting gave "bod" against "body" and the two never met.
+    if len(w) > 4 and w.endswith("ies"):
+        return w[:-3] + "y"
+    for suf in ("ing", "ed", "es", "s"):
         if len(w) > len(suf) + 2 and w.endswith(suf):
             return w[:-len(suf)]
     return w
@@ -84,7 +89,8 @@ class Schema:
     def __init__(self, entities):
         self.entities = entities
         self.terms = defaultdict(set)          # entity -> {term}
-        self.col_terms = defaultdict(dict)     # entity -> col -> {term}
+        self.col_terms = defaultdict(dict)     # entity -> col -> {term}, for ranking
+        self.col_forms = defaultdict(dict)     # entity -> col -> [{term}, ...] alternatives
         self.values = defaultdict(dict)        # entity -> col -> {value_lower: value}
         self.numeric = defaultdict(set)        # entity -> {numeric column}
         for ent, rows in entities.items():
@@ -107,15 +113,26 @@ class Schema:
                 # question writes "head-count", and neither should have to know
                 # about the other.
                 parts = _tokens(col.replace("_", " "))
-                ct = {_stem(t) for t in parts}
+                # ALTERNATIVE spellings of the same column name, each one a set
+                # of terms that must ALL be present for that spelling to count.
+                # They are alternatives, not conjuncts: `headcount` is matched
+                # by the word "headcount" OR by "head" and "count" together, and
+                # requiring every generated form at once -- which is what a
+                # single flat set amounts to -- made two of every three columns
+                # in the store impossible to name.
+                forms = []
+                if parts:
+                    forms.append({_stem(t) for t in parts})
                 if len(parts) == 1 and len(parts[0]) > 6:
                     for i in range(3, len(parts[0]) - 2):
                         a, b = parts[0][:i], parts[0][i:]
                         if len(b) > 2:
-                            ct |= {_stem(a), _stem(b)}
+                            forms.append({_stem(a), _stem(b)})
                 elif len(parts) > 1:
-                    ct.add(_stem("".join(parts)))
+                    forms.append({_stem("".join(parts))})
+                ct = set().union(*forms) if forms else set()
                 if ct:
+                    self.col_forms[ent][col] = forms
                     self.col_terms[ent][col] = ct
                     self.terms[ent] |= ct
                 vals = {r.get(col) for r in rows}
@@ -223,12 +240,41 @@ class Schema:
         """
         qs = self._qstems(q)
         best, score = None, 0.0
-        for col, ct in self.col_terms.get(entity, {}).items():
+        for col, forms in self.col_forms.get(entity, {}).items():
             if col in exclude or col not in self.numeric.get(entity, ()):
                 continue
-            hit = ct & qs
-            if not hit or len(hit) < len(ct):
-                continue                       # partial name matches say nothing
+            # One SPELLING of the name, matched completely. A partial match on
+            # a two-word name says nothing: `date`, `year`, `value` and `status`
+            # overlap with almost any question ever asked.
+            hit = max((f for f in forms if f <= qs), key=len, default=None)
+            if not hit:
+                continue
+            s = sum(self.weight.get(t, 0.0) for t in hit) * len(hit)
+            if s > score:
+                best, score = col, s
+        return best
+
+    def name_column(self, entity, q, exclude=()):
+        """The column of `entity` this question NAMES, numeric or not.
+
+        `distinct` needs a column to count the values of, and the question
+        always says which -- "how many distinct certification BODIES", "how
+        many different project MANAGERS". best_column cannot serve: the column
+        wanted here is a column of strings, which is exactly what that one
+        rules out.
+
+        Same completeness bar as best_column -- every word of the column's name
+        has to be present, so `date` and `year` do not attach themselves to any
+        question that happens to mention time.
+        """
+        qs = self._qstems(q)
+        best, score = None, 0.0
+        for col, forms in self.col_forms.get(entity, {}).items():
+            if col in exclude or col == "doc":
+                continue
+            hit = max((f for f in forms if f <= qs), key=len, default=None)
+            if not hit:
+                continue
             s = sum(self.weight.get(t, 0.0) for t in hit) * len(hit)
             if s > score:
                 best, score = col, s
