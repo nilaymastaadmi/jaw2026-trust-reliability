@@ -56,6 +56,7 @@ _ENTITY = [
                    r"|CM/\d+|pre-?qualification (?:requirement|criteri)"),
     ("dossier", r"tender dossier|bid value|\bRFP\b|RFP-\d+|earnest money|\bEMD\b"
                 r"|tender submission|bid submitted|relevant works|submission dossier"),
+    ("final_bill", r"final (?:RA )?bill|per the final|on the final bill"),
     ("ra_bill", r"\bRA bill|running account bill|\bRA-?\d+\b|retention"
                 r"|net claimed|value of work done|AR-\d{4}-\d+"),
     # BOQ lines before the bill that carries them: "the BOQ line items on
@@ -189,7 +190,13 @@ _FIELD_CUES = {
            (r"tenure|been with|since joining|days.{0,20}(?:with|at) (?:the |us)?"
             r"|date of joining|how long", "tenure_days")],
     "reference_letter": [(r"\bvalue\b|worth|contract value|amount", "value")],
-    "company_cert": [(r"defect liability|liability period|\bDLP\b", "defect_liability_days"),
+    # A question can ask for the YEAR of a row rather than a quantity on it:
+    # "which work was first completed, and in what year".
+    "work": [(r"in what year|which year|what year|year (?:was|did|it)", "year"),
+             (r"defect liability", "defect_liability_days")],
+    "company_cert": [(r"defect liability|liability period|\bDLP\b",
+                      "defect_liability_days"),
+                     (r"in what year|which year", "year"),
                      (r"\bvalue\b|worth|contract", "value")],
     "segment": [(r"previous year|prior year|comparative", "previous"), (r".", "current")],
     "seven_year": [(r"gross billing", "gross_billings"), (r"margin", "margin"),
@@ -245,7 +252,9 @@ _FIELD_CUES = {
                 (r"net claimed|net of|claimed", "net_claimed"),
                 (r"cumulative", "cumulative"),
                 (r"value of work|work done|executed", "value_of_work")],
-    "final_bill": [(r"gap|difference|less than|shortfall|under-?run|minus"
+    "final_bill": [(r"how many RA|RA bills?[^.?]{0,20}(?:raised|against|total)"
+                    r"|number of RA", "ra_count"),
+                   (r"gap|difference|less than|shortfall|under-?run|minus"
                     r"|exceed|versus|\bvs\b|against", "gap"),
                    (r"revised", "revised"),
                    (r"variation", "variations"),
@@ -570,10 +579,10 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
     # columns nobody wrote a cue for -- measured net-neutral on a held-out set,
     # which is the right trade for a mechanism whose whole purpose is the
     # questions nobody anticipated.
-    field = None
+    field, cued = None, False
     for pat, f in _FIELD_CUES.get(entity, ()):
         if re.search(pat, q, re.I):
-            field = f
+            field, cued = f, True
             break
     if field is None and sch is not None:
         field = sch.best_column(entity, q, exclude=selecting)
@@ -622,7 +631,11 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
         # to four hundred; the answer is the bar. Only an explicit aggregating
         # word overrides that.
         rownoun = _ROW_NOUN.get(entity)
-        counts_rows = fn != "min" and bool(rownoun and re.search(
+        # A column named EXPLICITLY beats the row noun. "How many RA bills were
+        # raised against contract 73, per the final bill" says "bills" twice and
+        # means the `ra_count` column of one final bill, not a count of final
+        # bills.
+        counts_rows = fn != "min" and not cued and bool(rownoun and re.search(
             r"(?:how many|number of|(?<!head-)(?<!head )count of)"
             r"\s+(?:\w+\s+){0,3}?(?:" + rownoun + r")",
             q, re.I))
@@ -656,7 +669,16 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
                       gr.entities.get(entity, [])[:1] for client_key in ("client",)):
         filters.append(("client", "eq", client))
     if category and entity == "work":
-        filters.append(("category", "eq", category))
+        # classify mines the category without regard to whether the question is
+        # selecting it or ruling it out. "Every completed work across the whole
+        # estate EXCEPT the Small Buildings category" names one and wants the
+        # other 154 works.
+        at_char = q.lower().find(category.split()[0].lower())
+        before = q[max(0, at_char - 30):max(0, at_char)] if at_char > 0 else ""
+        neg = re.search(r"\b(?:except|excluding|other than|apart from|besides"
+                        r"|not|aside from|leaving out|bar)\b[\s\w]{0,14}$",
+                        before, re.I)
+        filters.append(("category", "ne" if neg else "eq", category))
 
     # a year, when the question names exactly one
     # "FY2022-23" carries no word boundary before the digits, so a plain year
@@ -889,6 +911,22 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
             return {"entity": entity, "fn": "count", "field": field,
                     "filters": filters + [(field, "eq", bar)]}
 
+    # "The MOST RECENTLY issued bond", "the FIRST work to complete". A
+    # superlative over a date picks a row; the question then asks for some
+    # other column of that row. Which date column is whichever this table has.
+    _sup = re.search(r"most recent(?:ly)?|latest|newest|last (?:to|one)"
+                     r"|earliest|oldest|first (?:to|completed|one)|initial",
+                     q, re.I)
+    if _sup:
+        dated = next((c for c in ("issue_date", "completed", "date", "joined",
+                                  "letter_date", "initial_date")
+                      if c in _cols), None)
+        if dated and field != dated:
+            direction = ("min" if re.search(r"earliest|oldest|first|initial",
+                                            _sup.group(0), re.I) else "max")
+            return {"entity": entity, "filters": filters, "op": "argsel",
+                    "by": dated, "dir": direction, "fn": "sum", "field": field}
+
     # Two works named and an interval asked for between them: "how many days
     # elapsed between the completion of A and the completion of B". Two rows,
     # one date column, one subtraction -- no reduction over a single table can
@@ -925,10 +963,26 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
             return None
         named = sorted(((pos(l), l) for l in labels if pos(l) is not None))
         if len(named) >= 2:
+            # WHICH WAY ROUND. Reading order is not the answer: "profit after
+            # tax margin ON total revenue" is PAT/revenue, but "what percentage
+            # OF total revenue was consumed BY cost of materials" is
+            # materials/revenue and names the denominator first. The word in
+            # front of a line says which side it is on -- `of` and `out of`
+            # introduce the base, everything else introduces the measured part.
+            first, second = named[0], named[1]
+            # `pos` is a WORD index into the question, so the text before the
+            # label has to be found in the question itself, not by slicing the
+            # string at a word offset.
+            at_char = q.lower().find(first[1].split(" (")[0].lower())
+            before = q[max(0, at_char - 40):max(0, at_char)].lower() if at_char > 0 else ""
+            base_first = bool(re.search(r"\b(?:of|out of|share of|percentage of"
+                                        r"|proportion of|fraction of)\s*(?:the\s+)?$",
+                                        before))
+            num, den = (second, first) if base_first else (first, second)
             base = [f for f in filters if f[0] != "account"]
             return {"entity": entity, "fn": "sum", "field": field, "op": "ratio",
-                    "filters": base + [("account", "eq", named[0][1])],
-                    "denominator": base + [("account", "eq", named[1][1])]}
+                    "filters": base + [("account", "eq", num[1])],
+                    "denominator": base + [("account", "eq", den[1])]}
 
     # A work named in a question about a document ABOUT that work selects the
     # document's row: "the reference letter on file for the Pipeline Laying

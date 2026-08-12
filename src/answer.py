@@ -243,10 +243,15 @@ def _plan_one(db, q, catidx, clidx, overrides):
 # rupee sum scores zero and is unbounded, where the fallback ladder's typical
 # value of the right unit earns partial credit. Bounds are deliberately loose --
 # this catches category errors, it does not calibrate.
+# The guard catches ORDER-OF-MAGNITUDE errors -- a rupee sum answering a count
+# question -- so the bound only has to sit below the smallest money figure in
+# the corpus, which is a work of 8,500,000. Tighter than that starts rejecting
+# real answers: a `count` question can legitimately ask which YEAR something
+# happened in, and 2010 is not a category error.
 _UNIT_RANGE = {
-    "count": (0, 2000),          # 155 works, 519 invoices, 486 people
-    "days": (0, 25000),          # the corpus spans 2010-2026
-    "percent": (-1000.0, 1000.0),
+    "count": (0, 1e6),
+    "days": (0, 1e6),
+    "percent": (-100000.0, 100000.0),
     "money": (-1e13, 1e13),
 }
 

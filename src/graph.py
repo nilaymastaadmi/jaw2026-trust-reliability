@@ -387,6 +387,19 @@ class Graph:
                     return None
                 got.append(d)
             return abs((got[1] - got[0]).days)
+        if op == "argsel" and plan.get("by"):
+            # The value of one column on the row that maximises ANOTHER: "the
+            # amount on the most recently issued bond", "the year the first
+            # Large Bridges work completed". A reduction returns a number from
+            # a column; this returns a number from the ROW a column picks.
+            rows = self.select(plan["entity"], plan.get("filters"))
+            keyed = [r for r in rows if r.get(plan["by"]) is not None]
+            if not keyed:
+                return None
+            pick = (max if plan.get("dir", "max") == "max" else min)(
+                keyed, key=lambda r: str(r[plan["by"]]))
+            v = pick.get(plan.get("field"))
+            return v if isinstance(v, (int, float)) else None
         if op == "ratio" and plan.get("denominator"):
             num = self.run({**plan, "op": None})
             den = self.run({**plan, "op": None, "filters": plan["denominator"]})
