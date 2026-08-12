@@ -910,6 +910,7 @@ _DOC_ENTITY = (
     r"|net turnover|annexure [A-D]\b"
     r"|defect liability|date of joining|total experience|highest qualification"
     r"|curriculum vitae|financial standing|trade receivables ageing"
+    r"|ageing workbook|receivables[- ]ageing|wage group"
     r"|according to the (?:client )?reference letter"
     r"|reference letter[^.?]{0,24}(?:states|records|shows|gives|on file for)"
     r"|(?:value|amount)[^.?]{0,20}stated (?:in|on|by)[^.?]{0,20}letter"

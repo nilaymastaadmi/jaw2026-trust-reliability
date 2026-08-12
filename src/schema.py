@@ -133,7 +133,7 @@ class Schema:
         return {_stem(t) for t in _tokens(q)}
 
     def value_hits(self, entity, q, partial=True):
-        """[(column, value)] for every categorical value the question quotes.
+        """[(column, value, start, end)] for every categorical value quoted.
 
         A value is matched in full where the question quotes it in full, and
         otherwise by a contiguous run of its words -- "contract revenue"
@@ -141,6 +141,11 @@ class Schema:
         identifies "Bridges & Flyovers", neither of which any question writes
         the way the store spells it. Connectives and brackets are dropped from
         both sides so the two renderings the corpus itself uses both land.
+
+        The span is returned so the caller can tell an independent mention from
+        one sitting INSIDE another: the category "Irrigation" lives inside the
+        client "Irrigation & Waterways Dept, Govt of Rajasthan", and filtering
+        on both empties the table.
         """
         qw = [w for w in re.findall(r"[a-z0-9]+", q.lower()) if w not in _JOIN]
         out = []
@@ -149,19 +154,21 @@ class Schema:
             for low, orig in vals.items():
                 if len(low) < 4:
                     continue
-                if re.search(r"(?<![\w])" + re.escape(low) + r"(?![\w])", q, re.I):
-                    cover, cand = 1.0, orig
-                elif partial:
+                m = re.search(r"(?<![\w])" + re.escape(low) + r"(?![\w])", q, re.I)
+                if m is None and partial:
                     vw = [w for w in re.findall(r"[a-z0-9]+", low) if w not in _JOIN]
-                    if len(vw) < 2 or not _run_in(qw, vw):
-                        continue
-                    cover, cand = len(vw) / max(len(vw), 1), orig
-                else:
+                    if len(vw) >= 2 and _run_in(qw, vw):
+                        m = re.search(r"(?<![\w])" + re.escape(vw[0]) + r"(?![\w])",
+                                      q, re.I)
+                if m is None:
                     continue
-                if best is None or len(cand) > len(best[1]):
-                    best = (cover, cand)
+                if best is None or len(orig) > len(best[0]):
+                    best = (orig, m.start(), m.end())
             if best:
-                out.append((col, best[1]))
+                out.append((col, best[0], best[1], best[2]))
+        # Longest match first, so a column explaining more of the question is
+        # given the chance to claim it before a shorter one overlaps it.
+        out.sort(key=lambda r: -(r[3] - r[2]))
         return out
 
     def score_entity(self, entity, q, qs=None):

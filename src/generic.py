@@ -101,7 +101,7 @@ _ENTITY = [
     ("credential", r"PMI-\d+|6S-\d+|ASQ-\d+"
                    r"|credential[^.?]{0,30}(?:valid|expir|issue to|how long)"
                    r"|(?:valid|expir)\w*[^.?]{0,30}credential"),
-    ("cv", r"curriculum vitae|\bCV\b|date of joining|joined the company"
+    ("cv", r"curriculum vitae|\bCVs?\b|date of joining|joined the company|wage group"
            r"|total experience|years of (?:total )?experience|highest qualification"
            r"|been with (?:the company|us)|tenure"),
     ("reference_letter", r"reference letters?[^.?]{0,24}"
@@ -115,7 +115,8 @@ _ENTITY = [
     ("account", r"trial balance|ledger account|\baccount\b|revenue|expense|payable"
                 r"|receivable account|depreciation|balance sheet"),
     ("boq_item", r"\bboq\b|bill of quantit|measured (?:total|quantit)|line item"),
-    ("invoice", r"\binvoice|\bbilled\b|receipt|ageing"),
+    ("invoice", r"\binvoices?\b|ageing workbook|receivables[- ]ageing"
+                r"|\bbilled\b|receipts?\b|ageing"),
     ("person", r"engineer|personnel|staff|employee|people|\bperson\b"),
     # `client` as the UNIT BEING COUNTED, not as a scope phrase. "across all
     # clients", "our clients graded Very Good" and "forget one client" are all
@@ -146,6 +147,7 @@ _FIELD = {
     "account": "balance", "boq_item": "amount", "client": "value",
     "person": "value_led",
     "bond": "amount", "compliance": "complied", "iso_cert": "validity_days",
+    "invoice": "invoiced",
     "segment": "current", "ageing": "total", "principal_client": "billings",
     "seven_year": "net_revenue", "order_book": "contracts_in_execution",
     "dossier_standing": "net_profit",
@@ -197,7 +199,11 @@ _FIELD_CUES = {
     "credential": [(r"\bdays?\b|valid(?:ity)? (?:for|span|period)|how long|expiry"
                     r"|issue to expiry", "validity_days"),
                    (r"experience", "experience_years")],
-    "cv": [(r"experience|years? in the (?:industry|business)", "experience_years"),
+    "invoice": [(r"outstanding|still owed|unpaid|balance", "outstanding"),
+                (r"received|collected|actually (?:paid|came)", "received"),
+                (r"invoiced|billed|raised", "invoiced")],
+    "cv": [(r"wage group", "wage_group"),
+           (r"experience|years? in the (?:industry|business)", "experience_years"),
            (r"tenure|been with|since joining|days.{0,20}(?:with|at) (?:the |us)?"
             r"|date of joining|how long", "tenure_days")],
     "reference_letter": [(r"\bvalue\b|worth|contract value|amount", "value")],
@@ -335,7 +341,7 @@ _ROW_NOUN = {
     "work": r"works?|projects?|contracts?|assignments?|jobs?|packages?",
     "asset": r"assets?|items?|machines?|units?",
     "person": r"people|persons?|staff|employees|engineers",
-    "invoice": r"invoices?|bills?",
+    "invoice": r"invoices?|bills?|receipts?|entries|lines?",
     "client": r"clients?|accounts?|authorit(?:y|ies)",
 }
 
@@ -361,6 +367,10 @@ _CATEGORICAL = {
     "iso_cert": ("body", "standard"),
     "audit": ("auditor", "type", "standard"),
     "asset": ("make", "type", "location", "ownership", "condition"),
+    "invoice": ("client", "status"),
+    "cv": ("qualification", "designation", "business_unit", "wage_group"),
+    "reference_letter": ("client", "validity", "category", "role"),
+    "company_cert": ("client", "category"),
     "business_unit": ("unit", "scale"),
     "ledger_account": ("account",),
     "final_bill": ("client",),
@@ -527,7 +537,7 @@ _NO_SHAPE = {"asset", "boq_item", "bond", "compliance", "iso_cert", "audit",
              "boq_line", "bank_txn", "bank_year", "ledger_account",
              "ledger_line", "director", "ar_line",
              "company_cert", "cv", "credential", "reference_letter",
-             "dossier_standing",
+             "dossier_standing", "invoice",
              "segment", "seven_year", "ageing", "principal_client", "order_book"}
 
 # Works are covered by 23 shapes -- but every one of them is scoped to a single
@@ -622,7 +632,7 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
     # them and excluding them is what makes the match usable at all.
     selecting = set()
     if sch is not None:
-        selecting = {c for c, _ in sch.value_hits(entity, q)}
+        selecting = {h[0] for h in sch.value_hits(entity, q)}
     if client:
         selecting.add("client")
     if category:
@@ -956,10 +966,18 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
     # wrote down still filters -- and in either of the two renderings the
     # corpus uses for its own category names.
     taken = {f[0] for f in filters}
+    claimed = []          # character spans already explained by another column
     if sch is not None:
-        for col, val in sch.value_hits(entity, q):
+        for col, val, lo, hi in sch.value_hits(entity, q):
             if col in taken or col == "doc":
                 continue
+            # A value sitting INSIDE a value another column already matched is
+            # not an independent mention. The category "Irrigation" lives inside
+            # the client "Irrigation & Waterways Dept, Govt of Rajasthan", and
+            # filtering on both empties the table.
+            if any(not (hi <= a or lo >= b) for a, b in claimed):
+                continue
+            claimed.append((lo, hi))
             at_pos = q.lower().find(str(val).lower())
             before = q[max(0, at_pos - 30):at_pos] if at_pos > 0 else ""
             neg = re.search(r"\b(?:other than|apart from|besides|excluding|except"
