@@ -239,8 +239,12 @@ class Graph:
             {**i, "contract": b.get("contract"), "client": b.get("client")}
             for b in e.get("ra_bills", []) for i in b.get("items", [])]
 
-        self.entities["bank_txn"] = [{**r, "year": s.get("year"), "doc": s.get("doc")}
-                                     for s in e.get("bank", []) for r in s.get("rows", [])]
+        # A transaction's size, whichever side of the account it fell on: "the
+        # single largest transaction, deposit or withdrawal" needs one column.
+        self.entities["bank_txn"] = [
+            {**r, "year": s.get("year"), "doc": s.get("doc"),
+             "amount": (r.get("deposit") or 0) + (r.get("withdrawal") or 0)}
+            for s in e.get("bank", []) for r in s.get("rows", [])]
         self.entities["bank_year"] = [{k: v for k, v in s.items() if k != "rows"}
                                       for s in e.get("bank", [])]
         self.entities["ledger_account"] = [
@@ -387,6 +391,15 @@ class Graph:
                     return None
                 got.append(d)
             return abs((got[1] - got[0]).days)
+        if op == "diff" and plan.get("subtrahend") is not None:
+            # Two values of one column, subtracted. "Take the total value of
+            # completed Tunnels works and subtract the total value of completed
+            # Expressways works" -- one table, one column, two selections.
+            a = self.run({**plan, "op": None})
+            b = self.run({**plan, "op": None, "filters": plan["subtrahend"]})
+            if a is None or b is None:
+                return None
+            return abs(a - b) if plan.get("absolute") else a - b
         if op == "argsel" and plan.get("by"):
             # The value of one column on the row that maximises ANOTHER: "the
             # amount on the most recently issued bond", "the year the first

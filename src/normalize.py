@@ -11,9 +11,16 @@ from datetime import date
 _UNIT = {"cr": 10**7, "crore": 10**7, "crores": 10**7,
          "lakh": 10**5, "lakhs": 10**5, "lac": 10**5, "lacs": 10**5}
 
+# The sign is part of the number. This corpus is full of losses -- negative
+# profit years in the annual report and the dossiers' financial-standing
+# annexure, credit balances in the ledgers, and every `paid` invoice in the
+# ageing workbook, where Received exceeds Invoiced. Dropping the minus turns
+# -39,026,159 into +39,026,159, which under proportional scoring is not a
+# near-miss: it scores zero.
 _MONEY_UNIT = re.compile(
-    r"(?:INR|Rs\.?|₹|Rupees)?\s*([\d][\d,]*(?:\.\d+)?)\s*(Cr|Crores?|Lakhs?|Lacs?)\b", re.I)
-_MONEY_PLAIN = re.compile(r"(?:INR|Rs\.?|₹)\s*([\d][\d,]*(?:\.\d+)?)")
+    r"(?:INR|Rs\.?|₹|Rupees)?\s*(-?[\d][\d,]*(?:\.\d+)?)\s*(Cr|Crores?|Lakhs?|Lacs?)\b",
+    re.I)
+_MONEY_PLAIN = re.compile(r"(?:INR|Rs\.?|₹)\s*(-?[\d][\d,]*(?:\.\d+)?)")
 
 
 def money(s):
@@ -27,17 +34,26 @@ def money(s):
     s = str(s).strip()
     if not s:
         return None
+    # Accounting parentheses are a minus sign: the RA bills print retention as
+    # "(2,464,151)".
+    paren = bool(re.fullmatch(r"\(\s*[^()]*\d[^()]*\s*\)", s))
+    if paren:
+        s = s.strip()[1:-1].strip()
     m = _MONEY_UNIT.search(s)
     if m:
         val = float(m.group(1).replace(",", ""))
+        if paren:
+            val = -val
         # round(), not int(): 33.38 * 1e7 == 333800000.00000006 in binary float
         return round(val * _UNIT[m.group(2).lower()])
     m = _MONEY_PLAIN.search(s)
     if m:
-        return round(float(m.group(1).replace(",", "")))
-    m = re.search(r"\d[\d,]*(?:\.\d+)?", s)
+        v = round(float(m.group(1).replace(",", "")))
+        return -v if paren else v
+    m = re.search(r"-?\d[\d,]*(?:\.\d+)?", s)
     if m:
-        return round(float(m.group(0).replace(",", "")))
+        v = round(float(m.group(0).replace(",", "")))
+        return -v if paren else v
     return None
 
 

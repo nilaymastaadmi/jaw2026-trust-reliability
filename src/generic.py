@@ -85,6 +85,8 @@ _ENTITY = [
     ("account", r"trial balance|\bTB\b account|per the trial balance"),
     ("ledger_account", r"general ledger|ledger account|\bledger\b|posted line"
                        r"|chart of accounts|voucher"),
+    ("order_book", r"order book|contracts? (?:remained |still )?in execution"
+                   r"|credit notes?|variation orders?|awarded value at year"),
     ("director", r"board of directors|\bdirectors?\b|board composition"),
     # A credential named by its ID, or asked about as a document rather than
     # as the bar a portfolio is measured against -- which is what the released
@@ -218,7 +220,9 @@ _FIELD_CUES = {
              (r"amount|exposure|guarantee[ds]?\b|value|worth|total", "amount")],
     # Status first, then the noun it qualifies: "how many requirements are
     # marked complied" asks for the complied count, not the requirement count.
-    "compliance": [(r"not (?:met|complied)|un-?met|failed|outstanding requirement",
+    "compliance": [(r"(?:emd|earnest)[^.?]{0,30}(?:percent|%|share|ratio)"
+                    r"|percent\w*[^.?]{0,30}(?:emd|earnest)", "emd_pct"),
+                   (r"not (?:met|complied)|un-?met|failed|outstanding requirement",
                     "not_complied"),
                    (r"turnover", "turnover_req"),
                    # The matrices carry two people-numbers: the minimum the
@@ -262,7 +266,9 @@ _FIELD_CUES = {
                    (r"billed|executed|actually", "executed")],
     "boq_line": [(r"quantity|\bqty\b", "quantity"), (r"\brate\b", "rate"),
                  (r"amount|value|total", "amount")],
-    "bank_txn": [(r"withdraw|paid out|outflow|debit", "withdrawal"),
+    "bank_txn": [(r"single largest|largest transaction|biggest transaction"
+                  r"|deposit or withdrawal|either direction", "amount"),
+                 (r"withdraw|paid out|outflow|debit", "withdrawal"),
                  (r"deposit|received|inflow|credit|came in", "deposit"),
                  (r"balance", "balance")],
     "bank_year": [(r"closing|balance", "closing"),
@@ -289,7 +295,11 @@ _ROW_NOUN = {
     "bank_txn": r"transactions?|entries|lines?|payments?",
     "ledger_line": r"entries|lines?|postings?|vouchers?",
     "ledger_account": r"accounts?",
-    "director": r"directors?|board members?|people",
+    "director": r"directors?|board members?",
+    "cv": r"personnel|people|staff|employees|engineers|managers|key personnel",
+    "reference_letter": r"letters?|references?|testimonials?",
+    "company_cert": r"certificates?|copies|records",
+    "credential": r"credentials?|certificates?",
     "work": r"works?|projects?|contracts?|assignments?|jobs?|packages?",
     "asset": r"assets?|items?|machines?|units?",
     "person": r"people|persons?|staff|employees|engineers",
@@ -874,6 +884,13 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
             filters = [f for f in filters if f[0] != "year"]
             filters.append(("year", "eq", int(m.group(1))))
 
+    # A comparison the question states about the measured column: "bonds that
+    # carry a NON-ZERO guaranteed amount", "works worth MORE THAN INR 20 Cr".
+    # Without it the qualifier is silently dropped and every row is counted.
+    if re.search(r"non-?zero|greater than zero|above zero|positive|actually carr\w+"
+                 r"|that state one|which state a", q, re.I):
+        filters.append((field, "gt", 0))
+
     # Categorical values quoted in the question, for every column that has any.
     # Read off the store, so a bank, an asset make or a work category nobody
     # wrote down still filters -- and in either of the two renderings the
@@ -910,6 +927,34 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
                                          r"|\bat\b|\bof\b", q, re.I):
             return {"entity": entity, "fn": "count", "field": field,
                     "filters": filters + [(field, "eq", bar)]}
+
+    # Two values of ONE categorical column with a subtraction between them.
+    if re.search(r"\bsubtract\b|\bminus\b|\bless\b the|take away|deduct", q, re.I):
+        for col in ("category", "segment", "account", "client", "state"):
+            if col not in _cols:
+                continue
+            vals = {r.get(col) for r in gr.entities.get(entity, []) if r.get(col)}
+            hit = []
+            for v in sorted((str(x) for x in vals), key=len, reverse=True):
+                m = re.search(r"(?<![\w])" + re.escape(v).replace(r"\ ", r"\s*(?:&|and)?\s*")
+                              + r"(?![\w])", q, re.I)
+                if m and all(abs(m.start() - o[0]) > 3 for o in hit):
+                    hit.append((m.start(), v))
+            hit.sort()
+            if len(hit) == 2:
+                # "Subtract A from B" is B - A; "B subtract A" is also B - A.
+                a, b = hit[0][1], hit[1][1]
+                if re.search(r"subtract[^.?]{0,40}\bfrom\b", q, re.I):
+                    a, b = b, a
+                base = [f for f in filters if f[0] != col]
+                signed = re.search(r"negative|signed|in that order|net figure"
+                                   r"|report it (?:as )?negative|keep the sign", q, re.I)
+                return {"entity": entity, "fn": fn if fn in ("sum", "mean") else "sum",
+                        "field": field, "op": "diff", "absolute": not signed,
+                        "filters": base + [(col, "eq", a)],
+                        "subtrahend": base + [(col, "eq", b)]}
+            if hit:
+                break
 
     # "The MOST RECENTLY issued bond", "the FIRST work to complete". A
     # superlative over a date picks a row; the question then asks for some

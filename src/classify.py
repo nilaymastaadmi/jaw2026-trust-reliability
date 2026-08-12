@@ -1514,6 +1514,19 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
             plan["confidence"] = 0.0
         return plan
 
+    # 10c. the single largest or smallest work. `rank_value` is the GAP between
+    # the top two and every released question of that family says "second"; a
+    # question asking only for the biggest one has no shape at all, and fell to
+    # the client's whole portfolio total.
+    if _has(r"\bsingle\b[^.?]{0,30}(?:largest|highest|biggest|smallest|lowest)"
+            r"|(?:largest|highest|biggest|smallest|lowest)\s+(?:single|individual)"
+            r"|which (?:single |one )?\w{0,12}\s*(?:work|project|contract)[^.?]{0,30}"
+            r"(?:highest|largest|biggest|smallest|lowest)", q) and \
+            not _has(r"second|next|two largest|top two|gap|difference|minus|exceed", q):
+        plan["shape"] = None
+        plan["doc_entity"] = True          # hand it to the compositional query
+        return plan
+
     # 11. average work size across the client's portfolio.
     if _mean_asked(q) or _has(r"\btypical\b", q):
         plan["shape"] = "avg_work_size"
