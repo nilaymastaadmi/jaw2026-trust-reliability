@@ -22,27 +22,30 @@ but cannot change an answer the tested path already produces.
 """
 import re
 
+import normalize
+
 # Entity vocabulary. Order matters: the first entity whose words appear wins,
 # so the specific ones are listed before `work`, which is the default subject of
 # most questions and would otherwise absorb them.
 _ENTITY = [
     # -- the nine document types no named shape reaches -------------------
-    ("bond", r"\bbonds?\b|bank guarantee|performance guarantee|\bBGs?\b"
+    ("bond", r"\bbonds?\b|bank guarantee|performance guarantee|\bBGs?\b|guarante\w*"
              r"|guaranteed exposure|guarantee amount|guarantee percentage"
              r"|BND-\d+|guarantor"),
     ("audit", r"\baudits?\b|non-?conformit|\bNCs?\b|lead auditor|surveillance audit"
               r"|re-?certification audit|audit finding|major or minor"),
     ("iso_cert", r"\bISO\b|9001|14001|45001|certificate of registration"
-                 r"|certification body|ORG-\d+|accreditation|valid until"
-                 r"|certification date"),
+                 r"|certification bod(?:y|ies)|ORG-\d+|accreditation|valid until"
+                 r"|certification date|organisational certificates?"
+                 r"|issued by (?:a|the|another) body|accredited bod(?:y|ies)"),
     ("business_unit", r"business unit|head-?count by|per unit head|unit head-?count"
                       r"|\bunits?\b[^.?]{0,20}head-?count"),
-    ("dossier", r"tender dossier|bid value|\bRFP\b|RFP-\d+|earnest money|\bEMD\b"
-                r"|tender submission|bid submitted|relevant works|submission dossier"),
-    ("compliance", r"compliance matri|compliance checklist|eligibility"
+    ("compliance", r"\bmatri(?:x|ces)\b|compliance checklist|eligibility"
                    r"|requirements? (?:met|complied|satisfied)|complied\b"
                    r"|checklist|minimum turnover|turnover requirement"
                    r"|CM/\d+|pre-?qualification (?:requirement|criteri)"),
+    ("dossier", r"tender dossier|bid value|\bRFP\b|RFP-\d+|earnest money|\bEMD\b"
+                r"|tender submission|bid submitted|relevant works|submission dossier"),
     ("ra_bill", r"\bRA bill|running account bill|\bRA-?\d+\b|retention"
                 r"|net claimed|value of work done|AR-\d{4}-\d+"),
     # BOQ lines before the bill that carries them: "the BOQ line items on
@@ -151,7 +154,9 @@ _WORK_EVIDENCE = (r"\bworks?\b|\bprojects?\b|\bcontracts?\b|\bassignments?\b"
 # Which COLUMN of an entity a question is asking for. The entity says which
 # table; this says which number in it. Ordered, first match wins.
 _FIELD_CUES = {
-    "bond": [(r"percentage|per ?cent\b|\bpct\b|what (?:%|percent)", "guarantee_pct"),
+    "bond": [(r"\bdays?\b|validity|valid for|how long|in force|expiry", "validity_days"),
+             (r"stamp", "stamp_value"),
+             (r"percentage|per ?cent\b|\bpct\b|what (?:%|percent)", "guarantee_pct"),
              (r"amount|exposure|guarantee[ds]?\b|value|worth|total", "amount")],
     # Status first, then the noun it qualifies: "how many requirements are
     # marked complied" asks for the complied count, not the requirement count.
@@ -234,9 +239,65 @@ _ROW_NOUN = {
 # Columns that state a REQUIREMENT or a RATE rather than a quantity: the same
 # figure appears on every document of the type, so summing them is meaningless.
 _STATED = {"staff_min", "turnover_req", "owned_assets", "personnel",
-           "guarantee_pct", "emd_pct", "gst_pct", "retention_pct"}
+           "guarantee_pct", "emd_pct", "gst_pct", "retention_pct",
+           "relevant_works", "stamp_value"}
 _AGG_WORD = (r"\btotal(?:led|ling)?\b|in total|altogether|combined|\bsum\b"
              r"|aggregate|added up|add up|across all")
+
+
+# Columns whose VALUES a question quotes verbatim: an issuing bank, a work
+# description, an asset make, a certification body, a business unit. Rather than
+# a regex per column, the values are read out of the store and matched against
+# the question -- so a corpus with different banks, makes or units still works,
+# and a question naming one nobody anticipated is still filtered.
+_CATEGORICAL = {
+    "bond": ("bank", "work", "status"),
+    "dossier": ("work", "client"),
+    "compliance": ("work",),
+    "iso_cert": ("body", "standard"),
+    "audit": ("auditor", "type", "standard"),
+    "asset": ("make", "type", "location", "ownership", "condition"),
+    "business_unit": ("unit", "scale"),
+    "ledger_account": ("account",),
+    "final_bill": ("client",),
+    "ra_bill": ("client",),
+}
+
+
+def _match_values(gr, entity, q, taken):
+    """Filters for every categorical column whose value the question quotes.
+
+    Longest value first, so "Kalinga National Bank" is not matched as "Bank",
+    and case-insensitively, because half these questions are typed in a hurry.
+    """
+    out = []
+    for col in _CATEGORICAL.get(entity, ()):
+        if col in taken:
+            continue
+        vals = {r.get(col) for r in gr.entities.get(entity, []) if r.get(col)}
+        best = None
+        for v in sorted((str(x) for x in vals), key=len, reverse=True):
+            if len(v) < 3:
+                continue
+            m = re.search(r"(?<![\w])" + re.escape(v) + r"(?![\w])", q, re.I)
+            if m:
+                best = (v, m.start())
+                break
+        if best is None:
+            continue
+        # "issued by a body OTHER THAN TUV India" names the value in order to
+        # exclude it. Read as an equality that inverts the question.
+        before = q[max(0, best[1] - 30):best[1]]
+        neg = re.search(r"\b(?:other than|apart from|besides|excluding|except"
+                        r"|not|rather than|aside from)\b[\s\w]{0,12}$", before, re.I)
+        out.append((col, "ne" if neg else "eq", best[0]))
+    return out
+
+
+# Entities whose rows are stamped with a year, so a movement between two of
+# them is meaningful.
+_YEARLY = {"fin_line", "ar_line", "account", "ledger_account", "bank_year",
+           "bank_txn", "ledger_line"}
 
 
 def _first(pairs, text):
@@ -325,7 +386,18 @@ def plan(db, gr, question, answer_type=None, client=None, category=None, estate=
                   "complied", "not_complied", "requirements", "relevant_works",
                   "staff_min", "owned_assets", "personnel", "validity_days",
                   "ra_count", "quantity"}
-    if at == "count" and fn not in ("distinct",):
+    if at == "count" and re.search(r"\bsmallest\b|\blowest\b|\bfewest\b|\bleast\b"
+                                  r"|\blargest\b|\bbiggest\b|\bhighest\b|\bmost\b"
+                                  r"|\bmaximum\b|\bminimum\b", q, re.I) \
+            and field in _COUNT_COL:
+        # "smallest business unit by head-count -- how many people" says both
+        # "how many" and "smallest". The superlative is the reduction; the
+        # "how many" only says the answer is a count.
+        fn = ("min" if re.search(r"smallest|lowest|fewest|least|minimum", q, re.I)
+              else "max")
+    elif at == "count" and fn in ("min", "max", "median", "mean"):
+        pass                    # "smallest business unit by head-count" is a min
+    elif at == "count" and fn not in ("distinct",):
         # "How many BONDS do we hold" counts rows; "how many MINOR NCS were
         # raised" sums a column. What separates them is whether the noun being
         # counted is the table's own row -- so each table declares the words
@@ -336,11 +408,7 @@ def plan(db, gr, question, answer_type=None, client=None, category=None, estate=
         # percentage. Forty matrices quoting a ten-person minimum do not add up
         # to four hundred; the answer is the bar. Only an explicit aggregating
         # word overrides that.
-        if field in _STATED and not re.search(_AGG_WORD, q, re.I):
-            fn = "min" if re.search(r"\blowest\b|\bsmallest\b", q, re.I) else "max"
-            rownoun = None
-        else:
-            rownoun = _ROW_NOUN.get(entity)
+        rownoun = _ROW_NOUN.get(entity)
         counts_rows = fn != "min" and bool(rownoun and re.search(
             r"(?:how many|number of|(?<!head-)(?<!head )count of)"
             r"\s+(?:\w+\s+){0,3}?(?:" + rownoun + r")",
@@ -353,11 +421,15 @@ def plan(db, gr, question, answer_type=None, client=None, category=None, estate=
         # A day count is a number held in a column, never a row count.
         fn = "sum" if fn in ("count", "distinct", None) else fn
     elif at == "percent":
-        # A share of one thing in another needs a ratio, which this cannot
-        # express -- but a percentage the document STATES is just a column.
-        if not (field.endswith("_pct") or field in ("guarantee_pct", "emd_pct")):
+        # A share of one thing in another needs a ratio -- built below, where
+        # the two lines have been identified. A percentage the document STATES
+        # is just a column. Anything else this cannot express.
+        if field.endswith("_pct") or field in ("guarantee_pct", "emd_pct"):
+            fn = "max" if fn in ("count", "distinct", None) else fn
+        elif entity not in ("fin_line", "ar_line", "account"):
             return None
-        fn = "max" if fn in ("count", "distinct", None) else fn
+        else:
+            fn = "sum"
     if not fn:
         return None
 
@@ -374,7 +446,9 @@ def plan(db, gr, question, answer_type=None, client=None, category=None, estate=
         filters.append(("category", "eq", category))
 
     # a year, when the question names exactly one
-    years = sorted({int(y) for y in re.findall(r"\b(?:19|20)\d{2}\b", q)})
+    # "FY2022-23" carries no word boundary before the digits, so a plain year
+    # pattern finds nothing in exactly the questions that name two of them.
+    years = sorted({int(y) for y in re.findall(r"(?:\b|FY\s*)((?:19|20)\d{2})", q)})
     if len(years) == 1:
         if entity == "account":
             fy = [r["year"] for r in gr.entities["account"]
@@ -431,7 +505,6 @@ def plan(db, gr, question, answer_type=None, client=None, category=None, estate=
         elif re.search(r"with a reference|carry a reference|have a reference", q, re.I):
             filters.append(("has_ref", "eq", True))
         # a rupee bar, when the question sets one
-        import normalize
         thr = normalize.threshold_from_text(q)
         if thr and re.search(r"above|over|at least|exceed|more than|greater than"
                              r"|or higher|north of|upward", q, re.I):
@@ -447,16 +520,9 @@ def plan(db, gr, question, answer_type=None, client=None, category=None, estate=
 
     # ------------------------------------------------ the estate entities
     if entity == "bond":
-        m = re.search(r"\b([A-Z][\w]+(?:\s+[A-Z][\w]+){0,2}\s+Bank)\b", q)
-        if m:
-            filters.append(("bank", "contains", m.group(1)))
         m = re.search(r"\b(BND-\d+)\b", q, re.I)
         if m:
             filters.append(("bond_no", "eq", m.group(1).upper()))
-        if re.search(r"\breleased\b", q, re.I):
-            filters.append(("status", "eq", "Released"))
-        elif re.search(r"\blive\b|\bactive\b|still (?:in force|open)", q, re.I):
-            filters.append(("status", "eq", "Live"))
         if re.search(r"expir\w*|lapse|run out|valid until|end", q, re.I) and years:
             filters = [f for f in filters if f[0] != "year"]
             filters.append(("expiry_year", "eq", years[0]))
@@ -483,8 +549,14 @@ def plan(db, gr, question, answer_type=None, client=None, category=None, estate=
         if m:
             filters.append(("standard", "contains", m.group(1)))
         m = re.search(r"\b(ORG-\d+)\b", q, re.I)
-        if m and entity == "iso_cert":
+        if m:
             filters.append(("cert_no", "eq", m.group(1).upper()))
+        if entity == "audit" and re.search(r"\bcompleted\b|carried out|have (?:been )?"
+                                           r"(?:done|held)|so far", q, re.I):
+            filters.append(("status", "eq", "completed"))
+        elif entity == "audit" and re.search(r"\bscheduled\b|\bupcoming\b|\bdue\b",
+                                             q, re.I):
+            filters.append(("status", "eq", "scheduled"))
         m = re.search(r"\b((?:Dr|Mr|Ms|Mrs)\.?\s+[A-Z]\.?\s*\w+)", q)
         if m and entity == "audit":
             filters.append(("auditor", "contains", m.group(1).split()[-1]))
@@ -551,6 +623,59 @@ def plan(db, gr, question, answer_type=None, client=None, category=None, estate=
         if m:
             filters = [f for f in filters if f[0] != "year"]
             filters.append(("year", "eq", int(m.group(1))))
+
+    # Categorical values quoted in the question, for every column that has any.
+    filters += _match_values(gr, entity, q, {f[0] for f in filters})
+
+    # A bar the document STATES, repeated identically on every copy -- the
+    # minimum staff count, the 5% guarantee, the INR 100 stamp paper. Forty
+    # matrices quoting a ten-person minimum do not add up to four hundred; the
+    # answer is the bar. Only an explicit aggregating word overrides that, and
+    # it applies whatever unit the answer is in.
+    if field in _STATED and not re.search(_AGG_WORD, q, re.I) \
+            and not (at == "count" and normalize.threshold_from_text(q)):
+        return {"entity": entity, "filters": filters, "field": field,
+                "fn": "min" if re.search(r"\blowest\b|\bsmallest\b", q, re.I) else "max"}
+
+    # "How many of the forty matrices quote a minimum turnover of INR 240 Cr" --
+    # a count of the rows whose stated bar EQUALS a figure the question gives.
+    # Without this the figure is read as the answer rather than as the filter.
+    if at == "count" and field in _STATED:
+        bar = normalize.threshold_from_text(q)
+        if bar is not None and re.search(r"\bquote|\bstate|\brequire|\bdemand|\bset\b"
+                                         r"|\bat\b|\bof\b", q, re.I):
+            return {"entity": entity, "fn": "count", "field": field,
+                    "filters": filters + [(field, "eq", bar)]}
+
+    # Two financial years named, and a movement asked for between them.
+    if len(years) == 2 and entity in _YEARLY and re.search(
+            r"\bmove\w*|\bchange\w*|\bdifference\b|\bgap\b|between|year[- ]on[- ]year"
+            r"|\bversus\b|\bvs\b|\bgrow\w*|\bfell?\b|\brose\b|\bincrease\w*"
+            r"|\bdecrease\w*|\bswing\b|\bdelta\b", q, re.I):
+        return {"entity": entity, "filters": [f for f in filters if f[0] != "year"],
+                "fn": fn if fn in ("sum", "mean", "max", "min") else "sum",
+                "field": field, "op": "delta", "years": years,
+                "absolute": not re.search(r"negative if|signed|keep the sign", q, re.I)}
+
+    # A margin: one stated line over another, in the same year.
+    if at == "percent" and entity in ("fin_line", "ar_line", "account"):
+        labels = sorted({r.get("account") for r in gr.entities.get(entity, [])
+                         if r.get("account")}, key=lambda x: -len(x))
+        drop = {"and", "the", "of", "a", "for", "in", "on", "to", "b", "epc"}
+        qw = [w for w in re.findall(r"[a-z0-9]+", q.lower()) if w not in drop]
+
+        def pos(lab):
+            lw = [w for w in re.findall(r"[a-z0-9]+", lab.lower()) if w not in drop]
+            for i in range(len(qw) - len(lw) + 1):
+                if lw and qw[i:i + len(lw)] == lw:
+                    return i
+            return None
+        named = sorted(((pos(l), l) for l in labels if pos(l) is not None))
+        if len(named) >= 2:
+            base = [f for f in filters if f[0] != "account"]
+            return {"entity": entity, "fn": "sum", "field": field, "op": "ratio",
+                    "filters": base + [("account", "eq", named[0][1])],
+                    "denominator": base + [("account", "eq", named[1][1])]}
 
     if fn == "distinct":
         if re.search(r"client|authorit|department", q, re.I):

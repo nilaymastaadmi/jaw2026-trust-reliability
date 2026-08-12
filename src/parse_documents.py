@@ -109,6 +109,14 @@ def bonds():
         valid = re.search(r"(?:valid from\s+(\S+)\s+until\s+(\S+)"
                           r"|in force up to and including\s+([\d\w ]+?),)", f, re.I)
         status = re.search(r"Bond Reference \S+ Status (\w+)", f, re.I)
+        stamp = re.search(r"Stamp Paper\s*[\u2014-]\s*Value:\s*(INR\s*[\d,.]+)", f, re.I)
+        d_iss = normalize.parse_date(date.group(1)) if date else None
+        d_end = normalize.parse_date(valid.group(2) or valid.group(3) or "") if valid else None
+        # The long template states the date the guarantee comes into force; the
+        # short one runs from issue. Either way the validity SPAN is arithmetic
+        # over two dates already on the page, and questions ask for it.
+        d_from = (normalize.parse_date(valid.group(1))
+                  if (valid and valid.group(1)) else d_iss)
         out.append({
             "doc": doc,
             "bond_no": no.group(1) if no else None,
@@ -118,7 +126,11 @@ def bonds():
             "guarantee_pct": float(pct.group(1)) if pct else None,
             "amount": max(amts) if amts else None,
             "work": work.group(1).strip() if work else None,
-            "valid_until": (valid.group(2) or valid.group(3)) if valid else None,
+            "valid_from": d_from.isoformat() if d_from else None,
+            "valid_until": (d_end.isoformat() if d_end else
+                            ((valid.group(2) or valid.group(3)) if valid else None)),
+            "validity_days": (d_end - d_from).days if (d_end and d_from) else None,
+            "stamp_value": _money(stamp.group(1)) if stamp else None,
             "status": status.group(1) if status else None,
         })
     return out
@@ -142,6 +154,8 @@ def compliance():
         t = _text(doc)
         tender = re.search(r"(RFP-\d+)", t)
         f = _flat(t)
+        work = re.search(r"Tender (?:Ref: )?RFP-\d+\s*(?:·|\u00b7)?\s*([A-Za-z][A-Za-z &]{3,40}?)"
+                         r"\s*(?:CM/|Bid Value|\d)", f)
         st = [m.group(1) for m in _STATUS.finditer(t)]
         reqs = [{"n": i + 1, "status": v} for i, v in enumerate(st)]
         turnover = re.search(r"(?:turnover requirement\s*\(|Annual Turnover\s*>?=?\s*)"
@@ -161,6 +175,7 @@ def compliance():
         out.append({
             "doc": doc,
             "tender_ref": tender.group(1) if tender else None,
+            "work": work.group(1).strip() if work else None,
             "requirements": len(reqs),
             "complied": sum(1 for r in reqs if r["status"].lower() in _MET),
             "not_complied": sum(1 for r in reqs if r["status"].lower() not in _MET),
@@ -171,7 +186,11 @@ def compliance():
             "owned_assets": int(_g(assets)) if _g(assets) else None,
             "personnel": int(_g(people)) if _g(people) else None,
             "emd_ref": emd.group(1) if emd else None,
-            "emd_amount": _money(emd_amt.group(1)) if emd_amt else None,
+            # Some matrices quote the EMD only as a percentage of the bid.
+            # The rupee figure is derivable and is what a question asks for.
+            "emd_amount": (_money(emd_amt.group(1)) if emd_amt else
+                           (round(_money(bid.group(1)) * float(emd_amt.group(2)) / 100)
+                            if (emd_amt and emd_amt.group(2) and bid) else None)),
             "emd_pct": float(emd_amt.group(2)) if emd_amt and emd_amt.group(2) else None,
             "bid_value": _money(bid.group(1)) if bid else None,
             "submitted": subd.group(1) if subd else None,
@@ -210,7 +229,12 @@ def iso_certs():
             audits.append({"type": m.group(1), "date": m.group(2),
                            "auditor": m.group(3).strip(),
                            "major": int(major.group(1)) if major else None,
-                           "minor": int(minor.group(1)) if minor else None})
+                           "minor": int(minor.group(1)) if minor else None,
+                           # A future audit is on the schedule but has not
+                           # happened; counting it as one carried out is wrong.
+                           "status": ("scheduled"
+                                      if re.search(r"scheduled|TBD", f, re.I)
+                                      else "completed")})
         span = None
         if initial and until:
             span = (normalize.parse_date(until.group(1))
@@ -226,6 +250,7 @@ def iso_certs():
             "audits": audits,
             "major_ncs": sum(a["major"] or 0 for a in audits),
             "minor_ncs": sum(a["minor"] or 0 for a in audits),
+            "audits_done": sum(1 for a in audits if a["status"] == "completed"),
         })
     return out
 
@@ -247,8 +272,13 @@ def dossiers():
         units = [{"unit": m.group(1).strip(), "scale": m.group(2),
                   "headcount": int(m.group(3))} for m in _UNIT.finditer(t)]
         client = re.search(r"The Tender Inviting Authority,\s*\n\s*(.+)", t)
+        # Anchored on the title that precedes it, because the heading itself is
+        # letters and would otherwise be swept into the capture.
+        work = re.search(r"[Dd]o[Ss][Ss]ier\s+([A-Za-z][A-Za-z &]{2,30}?)\s*Works?"
+                         r"\s*[\u2014-]\s*Tender RFP-\d+", _flat(t))
         out.append({
             "doc": doc,
+            "work": work.group(1).strip() if work else None,
             "rfp_ref": rfp.group(1) if rfp else None,
             "bid_value": _money(bid.group(1)) if bid else None,
             "submitted": sub.group(1).strip() if sub else None,

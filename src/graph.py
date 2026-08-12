@@ -306,9 +306,35 @@ class Graph:
         return None
 
     def run(self, plan):
-        """plan = {entity, filters, fn, field} -> a number, or None."""
+        """plan = {entity, filters, fn, field} -> a number, or None.
+
+        Two compositions on top of select/filter/reduce, because both are
+        questions the corpus invites and neither is a single reduction:
+
+          delta  the same query run for two years, subtracted. "By how much did
+                 sub-contracting move between FY2022-23 and FY2023-24."
+          ratio  two queries over the same rows, divided and scaled to 100.
+                 "Profit after tax margin on total revenue, as a percentage."
+        """
         if not plan or not plan.get("entity") or not plan.get("fn"):
             return None
+        op = plan.get("op")
+        if op == "delta" and len(plan.get("years") or ()) == 2:
+            vals = []
+            for y in plan["years"]:
+                f = [x for x in plan.get("filters", []) if x[0] != "year"]
+                f.append(("year", "eq", y))
+                vals.append(self.run({**plan, "op": None, "filters": f}))
+            if None in vals:
+                return None
+            return abs(vals[1] - vals[0]) if plan.get("absolute", True) \
+                else vals[1] - vals[0]
+        if op == "ratio" and plan.get("denominator"):
+            num = self.run({**plan, "op": None})
+            den = self.run({**plan, "op": None, "filters": plan["denominator"]})
+            if num is None or not den:
+                return None
+            return round(num / den * 100, 2)
         rows = self.select(plan["entity"], plan.get("filters"))
         if not rows:
             # An empty selection is a real answer for a COUNT -- "how many

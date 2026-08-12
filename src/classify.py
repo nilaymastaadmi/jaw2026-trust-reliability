@@ -753,6 +753,14 @@ def _edit1(a, b):
     return a[i:] == b[i + 1:]
 
 
+def _stem(w):
+    """Enough of a stem to tell an inflection from a misspelling."""
+    for suf in ("ing", "ed", "es", "s", "e"):
+        if len(w) > len(suf) + 2 and w.endswith(suf):
+            return w[:-len(suf)]
+    return w
+
+
 def despell(q):
     """The question with near-misses of the pivot words corrected.
 
@@ -765,12 +773,13 @@ def despell(q):
         lw = w.lower()
         if len(lw) < 5 or lw in _PIVOT_SET:
             return w
-        # A singular/plural pair is not a typo, and correcting one into the
-        # other silently rewrites the question: "their total PROJECT value" is
-        # an awarded operand, "projects value" is not, and one edit separates
-        # them. Morphological variants are left exactly as written.
-        hits = [p for p in _PIVOT
-                if _edit1(lw, p) and lw.rstrip("s") != p.rstrip("s")]
+        # An inflection is not a typo, and correcting one into another
+        # silently rewrites the question. "their total PROJECT value" is an
+        # awarded operand and "projects value" is not; "across all INVOICES"
+        # is the scope a payment came in over and "invoiced" is the other side
+        # of the ledger entirely. Both are one edit away. Words sharing a stem
+        # are left exactly as written.
+        hits = [p for p in _PIVOT if _edit1(lw, p) and _stem(lw) != _stem(p)]
         return hits[0] if len(hits) == 1 else w
     return re.sub(r"[A-Za-z]+", fix, q)
 
@@ -858,11 +867,12 @@ def infer_answer_type(question):
 # imported from generic.py so that the decision to bypass the named shapes is
 # visible where the shapes are chosen.
 _DOC_ENTITY = (
-    r"\bbonds?\b|bank guarantee|performance guarantee|\bBND-\d+|guarantor"
+    r"\bbonds?\b|bank guarantee|performance guarantee|\bBND-\d+|guarantor|guarante\w*"
     r"|guaranteed exposure|guarantee percentage"
     r"|non-?conformit|\bNCs\b|lead auditor|surveillance audit"
     r"|\bISO\b|\b9001\b|\b14001\b|\b45001\b|certificate of registration"
-    r"|certification body|\bORG-\d{3,}"
+    r"|certification body|\bORG-\d{3,}|issued by (?:a|the|another) body"
+    r"|organisational certificates?|accredited (?:body|certification)"
     r"|business units?\b|head-?counts?\b"
     r"|tender dossier|bid value|\bRFP-\d+|earnest money|\bEMD\b"
     r"|compliance matri|compliance checklist|eligibility criteri"
@@ -885,6 +895,16 @@ _DOC_ENTITY = (
     r"|board of directors|annual report"
     r"|gross block|plant (?:and|&) machinery|asset register|safety[- ]certified"
     r"|trial balance")
+
+
+def _by_category_only(clidx, catidx, client, text):
+    """`client`, unless the only words matching it were category names."""
+    if not client:
+        return None
+    span = clidx._span(client, norm_text(text).split())
+    if span and all(t in catidx.words for t in span):
+        return None
+    return client
 
 
 def _negated(term, q):
@@ -1081,8 +1101,19 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     client = clidx.resolve(drop_negated_states(strip_cats(strip_work(q))),
                            tiebreak=tiebreak, state_tiebreak=named_work is None)
     if not client:
-        client = clidx.resolve(drop_negated_states(strip_work(q)), tiebreak=tiebreak,
-                               state_tiebreak=named_work is None)
+        # Retry with the category mentions left in. Some clients carry a
+        # category word in their own name -- Irrigation & Waterways Dept -- and
+        # stripping it loses them. But a winner found ONLY on category words is
+        # not a mention of that client: "in the small buildings category, how
+        # many works have no reference letter" matched Central Works &
+        # Buildings Bureau on `buildings` alone, which is the client the strip
+        # existed to rule out. So the retry runs, and its answer has to be
+        # justified by at least one word that is not category vocabulary.
+        client = _by_category_only(
+            clidx, catidx,
+            clidx.resolve(drop_negated_states(strip_work(q)), tiebreak=tiebreak,
+                          state_tiebreak=named_work is None),
+            drop_negated_states(strip_work(q)))
     if not client and named_work and named_work.get("client"):
         # The named work's client, BEFORE any unstripped retry. Questions that
         # name only a work ("the Farhan Khan PMP on Highway Construction —
@@ -1096,8 +1127,11 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
         plan["work"] = named_work["work"]
         plan["client_via"] = "work"
     if not client:
-        client = clidx.resolve(drop_negated_states(q), tiebreak=tiebreak,
-                               state_tiebreak=named_work is None)
+        client = _by_category_only(
+            clidx, catidx,
+            clidx.resolve(drop_negated_states(q), tiebreak=tiebreak,
+                          state_tiebreak=named_work is None),
+            drop_negated_states(q))
     if not client and person:
         led = db.led_by(person)
         names = {w["client"] for w in led if w.get("client")}
@@ -1153,7 +1187,13 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     # ladder's corpus-typical guess would have earned partial credit. Measured
     # on the paraphrase harness: 56 of 178 shorthand rewrites, every one of them
     # a question about one client answered with the sum of all 155 works.
-    plan["estate"] = bool(not client and not person and not clidx.mentioned(q)
+    # `mentioned` is asked of the same text resolution was asked of. Reading it
+    # off the raw question makes "in the small buildings CATEGORY" look like a
+    # mention of Central Works & Buildings Bureau, which is exactly the reading
+    # the category strip exists to rule out -- and the question then has
+    # neither a client nor an estate scope, so nothing can run.
+    plan["estate"] = bool(not client and not person
+                          and not clidx.mentioned(strip_cats(strip_work(q)))
                           and _has(_ESTATE, q))
 
     # A question about a document type NO named shape reads. All 23 shapes work
@@ -1169,7 +1209,7 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     # certificates -- because a false positive here loses a question the tested
     # path answers correctly.
     if _has(_DOC_ENTITY, q):
-        plan["shape"] = None
+        plan["shape"] = "document"
         plan["doc_entity"] = True
         return plan
     if plan["estate"] and len(cats) == 1:
@@ -1224,7 +1264,7 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
                 if not plan.get("category"):
                     plan["scope"] = "all"
             else:
-                plan["shape"] = None
+                plan["shape"] = "estate-count"
             return plan
         if plan["shape"] == "distinct_count" and not person:
             plan["confidence"] = 0.0

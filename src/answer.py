@@ -344,8 +344,9 @@ def main():
     if result:
         total, n, per_shape = result
         print(f"{'shape':24s} {'score':>7s} {'n':>3s}")
-        for shape, (s, k) in sorted(per_shape.items(), key=lambda kv: kv[1][0] / max(kv[1][1], 1)):
-            print(f"{shape:24s} {s:7.1f} {k:3d}   {s/max(k,1):.0%}")
+        for shape, (s, k) in sorted(per_shape.items(),
+                                    key=lambda kv: kv[1][0] / max(kv[1][1], 1)):
+            print(f"{str(shape):24s} {s:7.1f} {k:3d}   {s/max(k,1):.0%}")
         print(f"\nTOTAL {total:.1f} / {n} = {total/max(n,1):.1%}")
     print(f"\nwrote {a.out}")
     unsure = [r for r in rows if r["confidence"] < 1.0 or r["source"] != "router"]
