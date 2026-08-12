@@ -249,3 +249,41 @@ def find_grading(text):
                 if g.lower() == known.lower():
                     return known
     return None
+
+
+# ------------------------------------------------------- Indian fiscal years
+#
+# Every year-bearing document in this estate labels itself by the year the
+# fiscal year STARTS -- "FY 2019-20", volume GL/2019, DOC-FS-2019 -- and the
+# store follows suit. But the statements ALSO date themselves the accountant's
+# way, "For the financial year ended 31st March 2020", and questions written
+# off the statement quote that. The two name the same twelve months with
+# numbers one apart, so a question asking about the year ended 31 March 2024
+# reads its answer off the FY2024-25 statement: one year late, every time.
+#
+# Rewriting the phrase to the store's own spelling puts every downstream year
+# extractor on the document's convention without any of them having to know
+# about it.
+_FY_ENDED = re.compile(
+    r"\b(?:the\s+)?(?:financial\s+|fiscal\s+)?(?:year|FY|period)\s*"
+    r"(?:end(?:ed|ing)|closing)\s*(?:on\s+|as\s+at\s+)?"
+    r"(?:the\s+)?31\s*(?:st)?\s*(?:of\s+)?(?:March|Mar)\.?,?\s*(\d{4})\b", re.I)
+_AS_AT_MARCH = re.compile(
+    r"\bas\s+(?:at|on|of)\s+(?:the\s+)?31\s*(?:st)?\s*(?:of\s+)?(?:March|Mar)\.?,?\s*(\d{4})\b",
+    re.I)
+
+
+def _fy_label(m):
+    end = int(m.group(1))
+    return "FY%d-%02d" % (end - 1, end % 100)
+
+
+def fiscal_years(text):
+    """Question text with "year ended 31 March 2020" respelled "FY2019-20".
+
+    Idempotent, and a no-op on text that does not use the phrasing -- which is
+    every question in the released set. Only the fiscal-year-end wording is
+    touched; a bare "in 2020" means what it says and is left alone.
+    """
+    text = _FY_ENDED.sub(_fy_label, text)
+    return _AS_AT_MARCH.sub(_fy_label, text)

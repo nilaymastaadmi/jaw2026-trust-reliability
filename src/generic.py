@@ -555,7 +555,7 @@ _ESTATE = (r"across (?:the|our|all)|whole (?:completed|estate|record|portfolio|b
 def plan(db, gr, question, answer_type=None, client=None, category=None,
          estate=False, sch=None):
     """-> {entity, filters, fn, field} or None when the question is not placeable."""
-    q = _drop_contrast(question)
+    q = _drop_contrast(normalize.fiscal_years(question))
     at = (answer_type or "").lower()
 
     # WHICH TABLE. Two independent votes, because neither source is reliable

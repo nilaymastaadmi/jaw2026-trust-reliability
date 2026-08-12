@@ -491,7 +491,11 @@ def mine_work(q):
 
 
 def mine_years(q):
-    return sorted({int(y) for y in re.findall(r"\b(?:19|20)\d{2}\b", q)})
+    # The statements date themselves "year ended 31st March 2020" and label
+    # themselves FY2019-20; the store uses the label. Respell before reading,
+    # or every such question lands one fiscal year late.
+    return sorted({int(y) for y in
+                   re.findall(r"\b(?:19|20)\d{2}\b", normalize.fiscal_years(q))})
 
 
 # A figure the asker attributes to their own memory is not a bar the portfolio
