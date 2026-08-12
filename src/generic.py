@@ -498,6 +498,24 @@ def _named_person(gr, q):
     return None
 
 
+def _store_value(gr, entity, col, *words):
+    """The value this column ACTUALLY holds that one of `words` names.
+
+    A synonym written into a rule -- "hired" for equipment not owned -- is a
+    guess about the corpus's vocabulary. The register says "leased", and
+    filtering on the guess emptied the table, which reads as a confident zero
+    rather than as a miss. Asking the store which of the synonyms it uses costs
+    nothing and cannot be wrong about its own data.
+    """
+    vals = {str(r.get(col)) for r in gr.entities.get(entity, ())
+            if r.get(col) is not None}
+    for w in words:
+        for v in vals:
+            if w.lower() == v.lower() or w.lower() in v.lower().split():
+                return v
+    return None
+
+
 def _named_category(gr, q):
     """A work category named in the question, in either rendering.
 
@@ -786,26 +804,39 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
             filters.append(("year", "eq", years[0]))
 
     if entity == "asset":
-        if re.search(r"\bowned\b", q, re.I):
-            filters.append(("ownership", "eq", "owned"))
-        elif re.search(r"\bhired\b|\bleased\b|\brented\b", q, re.I):
-            filters.append(("ownership", "eq", "hired"))
+        # Every rule below is an APPROXIMATION of a column the question may
+        # have named outright. Where the schema matched a value of that column
+        # exactly -- `selecting` holds those columns -- the approximation is
+        # skipped: "how many 'Hydraulic Crane 50T' units" was being reduced to
+        # type contains "Crane" and counted all three crane models.
+        if "ownership" not in selecting:
+            # Whichever word the register itself uses. Hardcoding "hired"
+            # against a store that says "leased" filtered to nothing, and an
+            # empty count is a confident zero.
+            own = _store_value(gr, "asset", "ownership", "hired", "leased", "rented")
+            if re.search(r"\bowned\b", q, re.I):
+                filters.append(("ownership", "eq",
+                                _store_value(gr, "asset", "ownership", "owned") or "owned"))
+            elif own and re.search(r"\bhired\b|\bleased\b|\brented\b|\bon hire\b", q, re.I):
+                filters.append(("ownership", "eq", own))
         if re.search(r"not safety|un-?certified|without safety|lack\w* safety", q, re.I):
             filters.append(("safety_certified", "eq", False))
         elif re.search(r"safety[- ]certified|safety certification", q, re.I):
             filters.append(("safety_certified", "eq", True))
-        for cond in ("new", "good", "fair", "poor"):
-            if re.search(r"\bcondition\b[^.?]{0,20}\b" + cond + r"\b|\b" + cond
-                         + r"\b[^.?]{0,12}condition", q, re.I):
-                filters.append(("condition", "eq", cond))
-                break
-        for st in _STATES:
-            if re.search(r"\b" + re.escape(st) + r"\b", q, re.I):
-                filters.append(("location", "eq", st))
-                break
+        if "condition" not in selecting:
+            for cond in ("new", "good", "fair", "poor"):
+                if re.search(r"\bcondition\b[^.?]{0,20}\b" + cond + r"\b|\b" + cond
+                             + r"\b[^.?]{0,12}condition", q, re.I):
+                    filters.append(("condition", "eq", cond))
+                    break
+        if "location" not in selecting:
+            for st in _STATES:
+                if re.search(r"\b" + re.escape(st) + r"\b", q, re.I):
+                    filters.append(("location", "eq", st))
+                    break
         m = re.search(r"\b(excavator|crusher|batching plant|grader|roller|crane"
                       r"|tipper|paver|loader|compactor|dozer)s?\b", q, re.I)
-        if m:
+        if m and "type" not in selecting:
             filters.append(("type", "contains", m.group(1)))
         if re.search(r"acquisition year|year acquired|average age|how old", q, re.I):
             field = "acquired"

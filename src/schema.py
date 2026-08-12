@@ -98,7 +98,12 @@ class Schema:
                 continue
             for t in _tokens(ent.replace("_", " ")):
                 self.terms[ent].add(_stem(t))
-            cols = {k for r in rows[:200] for k in r}
+            # SORTED, not a bare set. Python randomises set iteration order
+            # per process, and every dict built from this one inherits it: the
+            # column scan below then broke ties differently on each run, so the
+            # same question could get two different answers from two runs of
+            # the same code. A submission has to be reproducible.
+            cols = sorted({k for r in rows[:200] for k in r})
             # Which columns hold a number. The answer to every question here is
             # a number, so only these can be the measured quantity -- a column
             # of strings can be a filter and nothing else.
@@ -139,7 +144,8 @@ class Schema:
                 # Short values are indexed too -- wage groups are single
                 # letters -- and matched only where their column is named in
                 # front of them, which value_hits enforces.
-                strs = {v for v in vals if isinstance(v, str) and 0 < len(v) < 60}
+                strs = sorted(v for v in vals
+                               if isinstance(v, str) and 0 < len(v) < 60)
                 if strs and len(strs) <= self.MAX_VALUES:
                     self.values[ent][col] = {v.lower(): v for v in strs}
         df = defaultdict(int)
@@ -184,8 +190,8 @@ class Schema:
                                   + r"\s*".join(re.escape(w) for w in colwords)
                                   + r"\s*[:\-]?\s*" + re.escape(low) + r"(?![\w])",
                                   q, re.I)
-                    if m and (best is None or len(orig) > len(best[0])):
-                        best = (orig, m.start(), m.end())
+                    if m and (best is None or (len(orig), 1, -m.start()) > best[3]):
+                        best = (orig, m.start(), m.end(), (len(orig), 1, -m.start()))
                     continue
                 m = re.search(r"(?<![\w])" + re.escape(low) + r"(?![\w])", q, re.I)
                 if m is None and partial:
@@ -195,13 +201,25 @@ class Schema:
                                       q, re.I)
                 if m is None:
                     continue
-                if best is None or len(orig) > len(best[0]):
-                    best = (orig, m.start(), m.end())
+                # Which of two values of the SAME column the question means.
+                # Longest wins -- "Hydraulic Crane 50T" over "Crane". Between
+                # two of equal length, the one the question comes back to:
+                # "grades condition as new, good or fair ... the cost of the
+                # assets graded fair" recites the domain once and names its
+                # subject three times. Ties after that go to the earlier
+                # mention, so the result never depends on iteration order.
+                n = len(re.findall(r"(?<![\w])" + re.escape(low) + r"(?![\w])",
+                                   q, re.I)) or 1
+                key = (len(orig), n, -m.start())
+                if best is None or key > best[3]:
+                    best = (orig, m.start(), m.end(), key)
             if best:
                 out.append((col, best[0], best[1], best[2]))
         # Longest match first, so a column explaining more of the question is
-        # given the chance to claim it before a shorter one overlaps it.
-        out.sort(key=lambda r: -(r[3] - r[2]))
+        # given the chance to claim it before a shorter one overlaps it. Column
+        # name breaks the tie, because the caller reads this list in order and
+        # the order must not depend on which run this is.
+        out.sort(key=lambda r: (-(r[3] - r[2]), r[0]))
         return out
 
     def score_entity(self, entity, q, qs=None):

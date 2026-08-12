@@ -58,6 +58,8 @@ python src/test_classify.py       # classifier: golds, coverage, family census
 python src/test_router_stress.py  # unseen paraphrases
 python src/test_entities.py       # client and person resolution
 python src/test_io.py             # the question file we are actually handed
+python src/test_estate.py         # extraction identities, completeness, cross-source
+python src/test_determinism.py    # the same question gets the same answer every run
 python src/stress.py              # 3,097 paraphrases of the released set
 ```
 
