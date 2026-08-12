@@ -462,7 +462,13 @@ def bank_statements():
 
 
 _GL_ACCOUNT = re.compile(r"^ACCOUNT (\d+)\s*[—-]\s*(.+?)$", re.M)
-_GL_ROW = re.compile(r"^(\d{4}-\d{2}-\d{2})\n(.+?)\n([\d,]+)\n([\d,]+)\n(Dr|Cr)$", re.M | re.S)
+# Two layouts. The asset accounts put the side on its own line; the liability
+# accounts attach it to the balance ("6,577,630 Cr"). Knowing only the first
+# parsed every liability account as empty -- no rows, no closing balance, and
+# a question about accounts payable had nothing to read.
+_GL_ROW = re.compile(
+    r"^(\d{4}-\d{2}-\d{2})\n(.+?)\n([\d,]+)\n([\d,]+)(?:[ \t]+(Dr|Cr)$|\n(Dr|Cr)$)",
+    re.M | re.S)
 
 
 def ledgers():
@@ -477,11 +483,21 @@ def ledgers():
             seg = t[m.start():end]
             rows = [{"date": r.group(1), "narration": " ".join(r.group(2).split()),
                      "amount": _num(r.group(3)), "balance": _num(r.group(4)),
-                     "side": r.group(5)} for r in _GL_ROW.finditer(seg)]
+                     "side": r.group(5) or r.group(6)} for r in _GL_ROW.finditer(seg)]
+            last = rows[-1] if rows else None
+            # A balance is a magnitude plus a side. Asked for as a SIGNED
+            # number, a credit closing is negative -- and the question says so
+            # when it wants that.
+            signed = None
+            if last and last["balance"] is not None:
+                signed = (-last["balance"] if last.get("side") == "Cr"
+                          else last["balance"])
             accounts.append({"code": int(m.group(1)),
                              "account": " ".join(m.group(2).split()),
                              "rows": rows,
-                             "closing": rows[-1]["balance"] if rows else None,
+                             "closing": last["balance"] if last else None,
+                             "side": last.get("side") if last else None,
+                             "closing_signed": signed,
                              "total": sum(r["amount"] or 0 for r in rows)})
         out.append({"doc": doc, "year": int(fy.group(1)) if fy else None,
                     "accounts": accounts})

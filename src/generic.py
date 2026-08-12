@@ -296,7 +296,9 @@ _FIELD_CUES = {
                   (r"closing|balance", "closing"),
                   (r"deposit|received|inflow", "deposits"),
                   (r"withdraw|outflow|paid out", "withdrawals")],
-    "ledger_account": [(r"closing|balance", "closing"), (r"total|sum", "total")],
+    "ledger_account": [(r"signed|negative if|which side|debit or credit",
+                        "closing_signed"),
+                       (r"closing|balance", "closing"), (r"total|sum", "total")],
     "ledger_line": [(r"balance", "balance"), (r".", "amount")],
 }
 
@@ -561,6 +563,19 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
     # Special Projects Division" names one of six and nothing else in the
     # estate answers it. Checked against the store rather than a word list, so
     # a corpus with different units still works.
+    # A ledger account named outright, checked against the chart of accounts
+    # rather than a word list: "the closing balance of the Output Gst Payable
+    # account" names one of 28 and nothing else in the estate answers it.
+    if entity in (None, "bank_year", "bank_txn", "account", "work", "client"):
+        for r in gr.entities.get("ledger_account", []):
+            nm = re.sub(r"\s*\((?:ASSET|LIABILITY|INCOME|EXPENSE|EQUITY)\)\s*$", "",
+                        str(r.get("account") or ""), flags=re.I).strip()
+            if len(nm) > 6 and re.search(
+                    r"(?<![\w])" + re.escape(nm).replace(r"\ ", r"\s+") + r"(?![\w])",
+                    q, re.I):
+                entity = "ledger_account"
+                break
+
     if entity in (None, "dossier", "compliance", "work", "person", "client"):
         for u in gr.entities.get("business_unit", []):
             head = re.split(r"\s*&\s*|\s+\(", u["unit"])[0]
