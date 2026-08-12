@@ -762,19 +762,18 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
     # Not four digits sitting inside an identifier: `PMI-200025` contains
     # `2000`, and reading it as a year filtered a credential table that has no
     # year column down to nothing.
+    # Not the edition year of a management standard either: "ISO 14001:2015"
+    # names the standard, and read as a date it emptied the audit table.
     years = sorted({int(y) for y in
-                    re.findall(r"(?<![\d-])(?:\b|FY\s*)((?:19|20)\d{2})(?!\d)", q)})
+                    re.findall(r"(?<![\d-])(?:\b|FY\s*)((?:19|20)\d{2})(?!\d)",
+                               normalize.mask_standards(q))})
     # Whether this table is even dated. Filtering a CV on a year empties it --
     # a person has no year -- and an empty selection is a confident zero.
     _cols = set(gr.entities.get(entity, [{}])[0] or ())
-    # A CONVENTION, and getting it wrong is a systematic zero across a whole
-    # family rather than a miss on one question. The Indian financial year is
-    # labelled by the year it STARTS in throughout this corpus -- DOC-FS-2020 is
-    # FY2020-21 -- but a question naming it by the year it ENDS ("for the year
-    # ended 31 March 2021", "as at 31 March 2026") means the year before.
-    if re.search(r"(?:year|FY|period|quarter)\s+end(?:ed|ing)|as at\s+31\s*"
-                 r"(?:st)?\s*March|ended\s+31\s*(?:st)?\s*March", q, re.I):
-        years = sorted({y - 1 for y in years})
+    # The fiscal-year-end convention -- "for the year ended 31 March 2021" is
+    # the FY2020-21 statement -- is applied by normalize.fiscal_years on the way
+    # in, so `q` already spells it the store's way. Doing it a second time here
+    # would put every such question a year EARLY.
     if len(years) == 1 and (_cols & {"year", "expiry_year", "acquired"}):
         if entity == "account":
             fy = [r["year"] for r in gr.entities["account"]

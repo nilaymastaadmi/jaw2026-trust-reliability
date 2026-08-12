@@ -287,3 +287,16 @@ def fiscal_years(text):
     """
     text = _FY_ENDED.sub(_fy_label, text)
     return _AS_AT_MARCH.sub(_fy_label, text)
+
+
+# A management-standard designation carries its own edition year -- "ISO
+# 14001:2015", "ISO 45001:2018", "OHSAS 18001:2007". It is part of the
+# standard's NAME, not a date the question is asking about, and read as one it
+# filters the audit table down to nothing.
+_STD_DESIG = re.compile(
+    r"\b(?:ISO|IEC|EN|BS|OHSAS)[ /]?\d{4,5}(?:\s*[-:]\s*(?:19|20)\d{2})?\b", re.I)
+
+
+def mask_standards(text):
+    """Same text, standard designations blanked, character offsets preserved."""
+    return _STD_DESIG.sub(lambda m: " " * len(m.group(0)), text)
