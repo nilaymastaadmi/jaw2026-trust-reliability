@@ -77,6 +77,8 @@ _ENTITY = [
     # A whole year of a bank statement, as against its individual lines. The
     # closing balance is the year's last balance, not a sum of balances, and
     # "deposits in 2021" is the year's total -- both are held per year already.
+    ("ledger_account", r"\baccount\s*\d{3,4}\b|in the (?:FY\s*\d{4}\s*)?ledger"
+                       r"|ledger account|general ledger"),
     ("bank_year", r"closing\s+(?:\w+\s+)?balance|balance at (?:the )?(?:year|end)"
                   r"|(?:total |all )?(?:deposits?|withdrawals?)\s*(?:in|during|for|across)"
                   r"|total (?:deposits?|withdrawals?)|year-end balance"),
@@ -638,10 +640,21 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
                   "categories_led", "clients_served", "audits_done",
                   "director_count", "contracts_in_execution", "credit_notes",
                   "variation_orders"}
-    if at == "count" and re.search(r"\bsmallest\b|\blowest\b|\bfewest\b|\bleast\b"
-                                  r"|\blargest\b|\bbiggest\b|\bhighest\b|\bmost\b"
-                                  r"|\bmaximum\b|\bminimum\b", q, re.I) \
-            and field in _COUNT_COL:
+    # "HIGHEST qualification" is the name of a column, not an instruction to
+    # take a maximum. A superlative directly in front of a word the filtered
+    # column is called is part of that column's name.
+    _sup_m = re.search(r"\bsmallest\b|\blowest\b|\bfewest\b|\bleast\b"
+                       r"|\blargest\b|\bbiggest\b|\bhighest\b|\bmost\b"
+                       r"|\bmaximum\b|\bminimum\b", q, re.I)
+    if _sup_m:
+        # `selecting` is the set of columns this question uses to pick rows,
+        # computed above; `filters` does not exist yet at this point.
+        after = q[_sup_m.end():_sup_m.end() + 24].lower()
+        for col in selecting:
+            if any(w and w in after for w in re.split(r"[_\s]+", col) if len(w) > 3):
+                _sup_m = None
+                break
+    if at == "count" and _sup_m and field in _COUNT_COL:
         # "smallest business unit by head-count -- how many people" says both
         # "how many" and "smallest". The superlative is the reduction; the
         # "how many" only says the answer is a count.
@@ -889,12 +902,13 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
                 if len(part) == 1:
                     hit = part[0]
                     break
-        if hit:
+        # A numbered account identifies a row outright, whether or not its NAME
+        # is also quoted: "Account 2100 in the FY 2023 ledger".
+        m = re.search(r"\baccount\s*(\d{3,4})\b", q, re.I)
+        if m and entity in ("ledger_account", "ledger_line"):
+            filters.append(("code", "eq", int(m.group(1))))
+        elif hit:
             filters.append(("account", "eq", hit))
-        else:
-            m = re.search(r"\baccount\s*(\d{3,4})\b", q, re.I)
-            if m and entity in ("ledger_account", "ledger_line"):
-                filters.append(("code", "eq", int(m.group(1))))
 
     if entity in ("bank_txn", "bank_year", "ledger_line", "ledger_account",
                   "fin_line", "ar_line", "ra_bill", "audit"):

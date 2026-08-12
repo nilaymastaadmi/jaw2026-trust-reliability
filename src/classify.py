@@ -1535,7 +1535,7 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     # the top two and every released question of that family says "second"; a
     # question asking only for the biggest one has no shape at all, and fell to
     # the client's whole portfolio total.
-    if _has(r"\bsingle\b[^.?]{0,70}(?:largest|highest|biggest|smallest|lowest)"
+    if _has(r"\bsingle\b[^.?]{0,110}(?:largest|highest|biggest|smallest|lowest)"
             r"|(?:largest|highest|biggest|smallest|lowest)\s+(?:single|individual)"
             r"|\bwhich\b[^.?]{0,70}(?:carries|has|states|records|shows)[^.?]{0,20}"
             r"(?:the )?(?:highest|largest|biggest|smallest|lowest)"
