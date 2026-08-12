@@ -969,13 +969,25 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
     claimed = []          # character spans already explained by another column
     if sch is not None:
         for col, val, lo, hi in sch.value_hits(entity, q):
-            if col in taken or col == "doc":
+            if col == "doc":
+                continue
+            if col in taken:
+                # Already filtered on -- by classify, or by a rule above. The
+                # text it matched is still SPOKEN FOR: without recording it,
+                # the category "Irrigation" sitting inside the client name
+                # "Irrigation & Waterways Dept, Govt of Rajasthan" looks like an
+                # independent mention and gets its own filter, which empties
+                # the table.
+                claimed.append((lo, hi))
                 continue
             # A value sitting INSIDE a value another column already matched is
             # not an independent mention. The category "Irrigation" lives inside
             # the client "Irrigation & Waterways Dept, Govt of Rajasthan", and
             # filtering on both empties the table.
             if any(not (hi <= a or lo >= b) for a, b in claimed):
+                # Claimed by a longer value on another column. Mark it taken so
+                # the older matcher below does not put it back.
+                taken.add(col)
                 continue
             claimed.append((lo, hi))
             at_pos = q.lower().find(str(val).lower())

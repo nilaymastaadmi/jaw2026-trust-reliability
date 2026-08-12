@@ -119,7 +119,10 @@ class Schema:
                     self.col_terms[ent][col] = ct
                     self.terms[ent] |= ct
                 vals = {r.get(col) for r in rows}
-                strs = {v for v in vals if isinstance(v, str) and 2 < len(v) < 60}
+                # Short values are indexed too -- wage groups are single
+                # letters -- and matched only where their column is named in
+                # front of them, which value_hits enforces.
+                strs = {v for v in vals if isinstance(v, str) and 0 < len(v) < 60}
                 if strs and len(strs) <= self.MAX_VALUES:
                     self.values[ent][col] = {v.lower(): v for v in strs}
         df = defaultdict(int)
@@ -151,8 +154,21 @@ class Schema:
         out = []
         for col, vals in self.values.get(entity, {}).items():
             best = None
+            colwords = [w for w in re.split(r"[_\s]+", col) if len(w) > 2]
             for low, orig in vals.items():
                 if len(low) < 4:
+                    # A short value is only a mention when its COLUMN is named
+                    # right in front of it: "Wage Group B" means the wage group,
+                    # a bare "B" means nothing. Skipping them outright lost every
+                    # single-letter code in the corpus.
+                    if not colwords:
+                        continue
+                    m = re.search(r"(?<![\w])"
+                                  + r"\s*".join(re.escape(w) for w in colwords)
+                                  + r"\s*[:\-]?\s*" + re.escape(low) + r"(?![\w])",
+                                  q, re.I)
+                    if m and (best is None or len(orig) > len(best[0])):
+                        best = (orig, m.start(), m.end())
                     continue
                 m = re.search(r"(?<![\w])" + re.escape(low) + r"(?![\w])", q, re.I)
                 if m is None and partial:
