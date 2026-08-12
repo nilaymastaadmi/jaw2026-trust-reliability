@@ -612,6 +612,23 @@ def reference_letters():
             val = re.search(r"\sValue\s+((?:INR|Rs\.?)\s*[\d.,]+\s*(?:Cr|Crore|Lakh)s?)", f, re.I)
         if comp is None:
             comp = re.search(r"\sCompleted\s+(\d{2}/\d{2}/\d{4}|\d{4}-\d{2}-\d{2})", f)
+        # Third template ("1. Project Details"), a labelled block that also
+        # carries the category and the contractor's role -- two facts the other
+        # two templates do not state at all.
+        if work is None:
+            work = re.search(r"Project Name\s+(.+?)\s+Scope of Work", f)
+        if val is None:
+            # Indian digit grouping with no unit word -- "INR 11,32,00,000/-" --
+            # is the fourth way this corpus writes money, and the only one the
+            # unit-suffixed pattern cannot see.
+            val = re.search(r"Contract Value\s+((?:INR|Rs\.?)\s*[\d.,]+"
+                            r"\s*(?:Cr|Crore|Lakh)s?|(?:INR|Rs\.?)\s*[\d,]{7,}(?=/|\s|$))",
+                            f, re.I)
+        if comp is None:
+            comp = re.search(r"Date of Completion\s+(\d{4}-\d{2}-\d{2}"
+                             r"|\d{2}/\d{2}/\d{4})", f)
+        nature = re.search(r"Nature of Work\s+(.+?)\s+Contract Value", f)
+        role = re.search(r"Contractor's Role\s+(Prime|JV Partner)", f)
         client = _text(doc).strip().split("\n")[0].strip()
         letter_date = re.search(r"(\d{1,2} \w{3} \d{4})", f)
         d = normalize.parse_date(comp.group(1)) if comp else None
@@ -625,6 +642,8 @@ def reference_letters():
             "year": d.year if d else None,
             "validity": valid.group(1) if valid else None,
             "letter_date": letter_date.group(1) if letter_date else None,
+            "category": nature.group(1).strip() if nature else None,
+            "role": role.group(1) if role else None,
         })
     return out
 

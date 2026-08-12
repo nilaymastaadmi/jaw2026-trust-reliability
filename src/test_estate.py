@@ -144,6 +144,55 @@ def main():
           all(a["director_count"] >= 3 for a in est["annual_reports"]),
           str([a["director_count"] for a in est["annual_reports"]]))
 
+    print("\n--- completeness: every document yields the fields it states ---")
+    # This is the check that would have caught, on the day the parser was
+    # written, that half the certificates and a third of the letters use a
+    # SECOND TEMPLATE. Each of those gaps was found by a question instead --
+    # which only happens if a question happens to ask.
+    for key, total, field, want in [
+            ("company_certs", 155, "work", 155),
+            ("company_certs", 155, "value", 155),
+            ("company_certs", 155, "defect_liability_days", 155),
+            ("cvs", 39, "joined", 39),
+            ("cvs", 39, "experience_years", 39),
+            ("credentials", 48, "validity_days", 48),
+            ("reference_letters", 132, "work", 132),
+            ("bonds", 60, "amount", 60),
+            ("compliance", 40, "turnover_req", 40),
+            ("dossiers", 6, "bid_value", 6)]:
+        got = sum(1 for r in est.get(key, []) if r.get(field) is not None)
+        check(f"{key}.{field:24s} {got:3d}/{want}", got >= want)
+
+    print("\n--- cross-source: two independent readings of the same fact ---")
+    # The contractor's certificate copy and the client's are separate documents
+    # describing the same 155 works, and 113 reference letters restate the value
+    # a third time. Agreement is the strongest evidence available that the
+    # extraction is right, and it needs no question set at all.
+    db = corpus.load_json("db.json")
+    cc = {w["work"]: w for w in db["works"]}
+    ccc = {c["work"]: c for c in est["company_certs"] if c.get("work")}
+    both = set(cc) & set(ccc)
+    check(f"client and contractor copies cover the same works  {len(both)}/155",
+          len(both) == 155)
+    for f_a, f_b in (("value", "value"), ("completed", "completed"),
+                     ("category", "category"), ("lead", "manager")):
+        dis = [w for w in both
+               if str(cc[w].get(f_a) or "").lower()[:10]
+               != str(ccc[w].get(f_b) or "").lower()[:10]]
+        check(f"the two copies agree on {f_a:10s} {len(both) - len(dis):3d}/{len(both)}",
+              not dis, ("e.g. " + str(dis[:1])) if dis else "")
+    # The one work whose value is not a clean multiple of a lakh is rendered
+    # two ways across the corpus: 193,299,999 in raw digits and 193.30 Cr when
+    # rounded. The raw figure is canonical -- the organisers' own worked example
+    # HS-IC-0007 sums to 2,008,199,999 using it.
+    letters = {r["work"]: r["value"] for r in est["reference_letters"]
+               if r.get("value") and r.get("work") in cc}
+    dis = [w for w, v in letters.items() if v != cc[w]["value"]]
+    check(f"reference letters agree with the certificates  "
+          f"{len(letters) - len(dis)}/{len(letters)}",
+          all(w == "Road Widening — Maharashtra Pkg-21" for w in dis),
+          f"unexplained: {[w for w in dis if 'Pkg-21' not in w][:2]}")
+
     print()
     if fail:
         print(f"FAILURES: {len(fail)}")
