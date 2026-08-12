@@ -33,7 +33,10 @@ _ENTITY = [
     ("bond", r"\bbonds?\b|bank guarantee|performance guarantee|\bBGs?\b|guarante\w*"
              r"|guaranteed exposure|guarantee amount|guarantee percentage"
              r"|BND-\d+|guarantor"),
-    ("audit", r"\baudits?\b|non-?conformit|\bNCs?\b|lead auditor|surveillance audit"
+    ("seven_year", r"seven-?year|7-?year|financial summary|which fiscal year"
+                   r"|highest net revenue|by fiscal year"),
+    ("audit", r"\baudits?\b(?!\s+(?:committee|file|pack|trail|checklist|memo))"
+              r"|non-?conformit|\bNCs?\b|lead auditor|surveillance audit"
               r"|re-?certification audit|audit finding|major or minor"),
     ("iso_cert", r"\bISO\b|9001|14001|45001|certificate of registration"
                  r"|certification bod(?:y|ies)|ORG-\d+|accreditation|valid until"
@@ -41,7 +44,7 @@ _ENTITY = [
                  r"|issued by (?:a|the|another) body|accredited bod(?:y|ies)"),
     ("business_unit", r"business unit|head-?count by|per unit head|unit head-?count"
                       r"|\bunits?\b[^.?]{0,20}head-?count"),
-    ("segment", r"segment revenue|revenue by (?:work )?categor|segmental"
+    ("segment", r"\bsegments?\b|segment revenue|revenue by (?:work )?categor|segmental"
                 r"|by segment|segment(?:al)? (?:analysis|performance|commentary)"),
     ("ageing", r"receivables ageing|ageing annexure|ageing (?:table|bucket)"
                r"|(?:more|greater|older) than 12 months|6\s*(?:-|to|\u2013)\s*12 months"
@@ -143,6 +146,7 @@ _FIELD = {
     "person": "value_led",
     "bond": "amount", "compliance": "complied", "iso_cert": "validity_days",
     "segment": "current", "ageing": "total", "principal_client": "billings",
+    "seven_year": "net_revenue", "order_book": "contracts_in_execution",
     "dossier_standing": "net_profit",
     "credential": "validity_days", "cv": "tenure_days",
     "company_cert": "value", "reference_letter": "value",
@@ -206,7 +210,8 @@ _FIELD_CUES = {
                      (r"\bvalue\b|worth|contract", "value")],
     "segment": [(r"previous year|prior year|comparative", "previous"), (r".", "current")],
     "seven_year": [(r"gross billing", "gross_billings"), (r"margin", "margin"),
-                   (r"profit", "profit"), (r"revenue|net revenue", "net_revenue")],
+                   (r"profit", "profit"), (r"revenue|net revenue", "net_revenue"),
+                   (r"which (?:fiscal )?year", "year")],
     "ageing": [(r"(?:more|greater|older) than 12|over 12|> ?12|beyond a year", "gt12"),
                (r"6\s*(?:-|to|\u2013)\s*12", "m6_12"),
                (r"(?:less|under|within) (?:than )?6|< ?6", "lt6"), (r".", "total")],
@@ -215,7 +220,9 @@ _FIELD_CUES = {
                          (r"turnover", "net_turnover"), (r".", "net_profit")],
     "order_book": [(r"credit note", "credit_notes"),
                    (r"variation", "variation_orders"),
-                   (r"awarded|order book", "order_book_awarded"),
+                   (r"contracts? (?:remained|still|in execution)|how many contracts",
+                    "contracts_in_execution"),
+                   (r"awarded|aggregate awarded", "order_book_awarded"),
                    (r"contract", "contracts_in_execution")],
     "bond": [(r"contract value|implied|secures|5% of", "contract_value"),
              (r"\bdays?\b|validity|valid for|how long|in force|expiry", "validity_days"),
@@ -939,6 +946,8 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
     if re.search(r"non-?zero|greater than zero|above zero|positive|actually carr\w+"
                  r"|that state one|which state a", q, re.I):
         filters.append((field, "gt", 0))
+    elif re.search(r"of zero\b|\bzero rupees|equal to zero|amount of nil|\bnil\b", q, re.I):
+        filters.append((field, "eq", 0))
 
     # Categorical values quoted in the question, for every column that has any.
     # Read off the store, so a bank, an asset make or a work category nobody

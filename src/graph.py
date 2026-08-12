@@ -122,7 +122,11 @@ class Graph:
             })
         self.entities["invoice"] = inv
 
-        self.entities["asset"] = [dict(a) for a in (self.fin.get("assets") or [])]
+        # The register's last row is a TOTAL, not an asset. Counting it makes
+        # 210 items into 211 and puts a summary row in reach of every filter.
+        self.entities["asset"] = [
+            dict(a) for a in (self.fin.get("assets") or [])
+            if str(a.get("asset_id") or "").strip().lower() not in ("total", "")]
 
         accounts = []
         for year, rows in (self.fin.get("trial_balance") or {}).items():

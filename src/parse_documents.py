@@ -104,8 +104,15 @@ def bonds():
                             r"INR\s*[\d.,]+\s*(?:Lakh|Cr|Crore)s?|Rs\.?\s*[\d,]+"
                             r"|INR\s*[\d,]+)", f, re.I)]
         amts = [a for a in amts if a is not None]
-        work = re.search(r"(?:for the work of|Performance Bond\s*[—-]\s*|Subject:.*?[—-]\s*)"
-                         r"([A-Za-z &]+?)(?:\s*Works?)?\s*(?:,|\(|Tender)", f)
+        # "for the work of X Works, and" is the long template's clause and it
+        # sits AFTER the Subject line, so a single alternation matched the
+        # subject first and left the work empty on all 28 bonds that carry an
+        # amount. Tried in order of specificity instead.
+        work = (re.search(r"for the work of\s+([A-Za-z &]+?)\s*Works?\s*,", f)
+                or re.search(r"Performance Bond\s*[\u2014-]\s*([A-Za-z &]+?)"
+                             r"\s*Works?\s*\(", f)
+                or re.search(r"Subject:[^\u2014-]*[\u2014-]\s*([A-Za-z &]+?)"
+                             r"(?:\s*Works?)?\s*(?:,|\(|Tender)", f))
         valid = re.search(r"(?:valid from\s+(\S+)\s+until\s+(\S+)"
                           r"|in force up to and including\s+([\d\w ]+?),)", f, re.I)
         status = re.search(r"Bond Reference \S+ Status (\w+)", f, re.I)
