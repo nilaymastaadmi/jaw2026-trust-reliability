@@ -715,6 +715,51 @@ def dossier_standing():
     return out
 
 
+# ------------------------------------------------------ personnel certificates
+
+_PC_FIELDS = ["Credential Type", "Credential ID", "Issuing Authority",
+              "Date of Issue", "Valid Through", "Employment Status",
+              "Years of Experience", "Highest Qualification"]
+
+
+def credentials():
+    """The 48 personnel certificates.
+
+    build_db reads the holder and the issue date off these; the EXPIRY is here
+    too and nothing reads it, so "how many days is this credential valid for"
+    -- arithmetic over two dates on the same page -- had no source at all.
+    """
+    out = []
+    for doc in _docs("DOC-PCERT-"):
+        t = _text(doc)
+        rec = {"doc": doc}
+        for lab in _PC_FIELDS:
+            v = _after(t, lab, r"(.+)")
+            rec[lab.lower().replace(" ", "_")] = v.strip() if v else None
+        # Second template ("This credential is conferred upon"): a shorter
+        # certificate that labels the same three facts differently -- `Issued`
+        # rather than `Date of Issue`, `Certificate No.` rather than
+        # `Credential ID`, and the holder on the line after a different phrase.
+        if not rec.get("date_of_issue"):
+            rec["date_of_issue"] = _after(t, "Issued", r"(.+)")
+        if not rec.get("credential_id"):
+            rec["credential_id"] = _after(t, "Certificate No.", r"(\S+)")
+        m = re.search(r"(?:This is to certify that|This credential is conferred upon)"
+                      r"\s*\n\s*(.+)", t)
+        rec["name"] = m.group(1).strip() if m else None
+        emp = re.search(r"Employee ID:\s*(\S+)", t)
+        rec["employee_id"] = emp.group(1) if emp else None
+        exp = re.search(r"(\d+)", rec.get("years_of_experience") or "")
+        rec["experience_years"] = int(exp.group(1)) if exp else None
+        d0 = normalize.parse_date(rec.get("date_of_issue") or "")
+        d1 = normalize.parse_date(rec.get("valid_through") or "")
+        rec["issued"] = d0.isoformat() if d0 else None
+        rec["expires"] = d1.isoformat() if d1 else None
+        rec["validity_days"] = (d1 - d0).days if (d0 and d1) else None
+        out.append(rec)
+    return out
+
+
 # ------------------------------------------------------------------- driver
 
 def build(verbose=True):
@@ -731,6 +776,7 @@ def build(verbose=True):
         "annual_reports": annual_reports(),
         "company_certs": company_certs(),
         "cvs": cvs(),
+        "credentials": credentials(),
         "reference_letters": reference_letters(),
         "annual_tables": annual_tables(),
         "dossier_standing": dossier_standing(),

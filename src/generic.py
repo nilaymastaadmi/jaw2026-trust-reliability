@@ -75,6 +75,19 @@ _ENTITY = [
     ("ledger_account", r"general ledger|ledger account|\bledger\b|posted line"
                        r"|chart of accounts|voucher"),
     ("director", r"board of directors|\bdirectors?\b|board composition"),
+    # A credential named by its ID, or asked about as a document rather than
+    # as the bar a portfolio is measured against -- which is what the released
+    # set means by the word, so the pattern requires more than `credential`.
+    ("credential", r"PMI-\d+|6S-\d+|ASQ-\d+"
+                   r"|credential[^.?]{0,30}(?:valid|expir|issue to|how long)"
+                   r"|(?:valid|expir)\w*[^.?]{0,30}credential"),
+    ("cv", r"curriculum vitae|\bCV\b|date of joining|joined the company"
+           r"|total experience|years of (?:total )?experience|highest qualification"
+           r"|been with (?:the company|us)|tenure"),
+    ("reference_letter", r"reference letter (?:on file|states|records)"
+                         r"|according to the (?:client )?reference letter"
+                         r"|(?:value|amount) (?:stated|recorded) (?:in|on|by) the"
+                         r"[^.?]{0,20}(?:reference|letter)"),
     # -- what was here before ---------------------------------------------
     ("asset", r"plant|machinery|equipment|asset|excavator|crusher|batching|grader"
               r"|roller|crane|tipper|gross block|fleet"),
@@ -112,6 +125,8 @@ _FIELD = {
     "account": "balance", "boq_item": "amount", "client": "value",
     "person": "value_led",
     "bond": "amount", "compliance": "complied", "iso_cert": "validity_days",
+    "credential": "validity_days", "cv": "tenure_days",
+    "company_cert": "value", "reference_letter": "value",
     "audit": "minor", "dossier": "bid_value", "business_unit": "headcount",
     "fin_line": "current", "ra_bill": "net_claimed", "final_bill": "gap",
     "boq_line": "amount", "bank_txn": "deposit", "bank_year": "closing",
@@ -155,6 +170,9 @@ _WORK_EVIDENCE = (r"\bworks?\b|\bprojects?\b|\bcontracts?\b|\bassignments?\b"
 # Which COLUMN of an entity a question is asking for. The entity says which
 # table; this says which number in it. Ordered, first match wins.
 _FIELD_CUES = {
+    "credential": [(r"\bdays?\b|valid(?:ity)? (?:for|span|period)|how long|expiry"
+                    r"|issue to expiry", "validity_days"),
+                   (r"experience", "experience_years")],
     "cv": [(r"experience|years? in the (?:industry|business)", "experience_years"),
            (r"tenure|been with|since joining|days.{0,20}(?:with|at) (?:the |us)?"
             r"|date of joining|how long", "tenure_days")],
@@ -352,6 +370,24 @@ def _named_work(gr, q):
     return best[1] if len(hits) == 1 else None
 
 
+def _named_works(gr, q):
+    """Every completed work the question names, in the order they appear.
+
+    Package numbers are globally unique and work titles are not -- four "RCC
+    Bridge" works exist across four states -- so a title only counts where it
+    resolves to exactly one row.
+    """
+    found = []
+    for m in re.finditer(r"\bPkg[\s\-_]*(\d{1,3})\b", q, re.I):
+        want = int(m.group(1))
+        for r in gr.entities.get("work", []):
+            mm = re.search(r"Pkg[\s\-_]*(\d{1,3})", r.get("work") or "", re.I)
+            if mm and int(mm.group(1)) == want and r["work"] not in found:
+                found.append(r["work"])
+                break
+    return found
+
+
 def _named_person(gr, q):
     """A person named in full, or by a part-name unique among the 39."""
     names = [r.get("name") for r in gr.entities.get("person", []) if r.get("name")]
@@ -410,7 +446,8 @@ _NO_SHAPE = {"asset", "boq_item", "bond", "compliance", "iso_cert", "audit",
              "dossier", "business_unit", "fin_line", "ra_bill", "final_bill",
              "boq_line", "bank_txn", "bank_year", "ledger_account",
              "ledger_line", "director", "ar_line",
-             "company_cert", "cv", "reference_letter", "dossier_standing",
+             "company_cert", "cv", "credential", "reference_letter",
+             "dossier_standing",
              "segment", "seven_year", "ageing", "principal_client", "order_book"}
 
 # Works are covered by 23 shapes -- but every one of them is scoped to a single
@@ -528,7 +565,11 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
     _COUNT_COL = {"minor", "major", "minor_ncs", "major_ncs", "headcount",
                   "complied", "not_complied", "requirements", "relevant_works",
                   "staff_min", "owned_assets", "personnel", "validity_days",
-                  "ra_count", "quantity"}
+                  "ra_count", "quantity", "experience_years", "tenure_days",
+                  "defect_liability_days", "works_led", "credentials",
+                  "categories_led", "clients_served", "audits_done",
+                  "director_count", "contracts_in_execution", "credit_notes",
+                  "variation_orders"}
     if at == "count" and re.search(r"\bsmallest\b|\blowest\b|\bfewest\b|\bleast\b"
                                   r"|\blargest\b|\bbiggest\b|\bhighest\b|\bmost\b"
                                   r"|\bmaximum\b|\bminimum\b", q, re.I) \
@@ -591,7 +632,14 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
     # a year, when the question names exactly one
     # "FY2022-23" carries no word boundary before the digits, so a plain year
     # pattern finds nothing in exactly the questions that name two of them.
-    years = sorted({int(y) for y in re.findall(r"(?:\b|FY\s*)((?:19|20)\d{2})", q)})
+    # Not four digits sitting inside an identifier: `PMI-200025` contains
+    # `2000`, and reading it as a year filtered a credential table that has no
+    # year column down to nothing.
+    years = sorted({int(y) for y in
+                    re.findall(r"(?<![\d-])(?:\b|FY\s*)((?:19|20)\d{2})(?!\d)", q)})
+    # Whether this table is even dated. Filtering a CV on a year empties it --
+    # a person has no year -- and an empty selection is a confident zero.
+    _cols = set(gr.entities.get(entity, [{}])[0] or ())
     # A CONVENTION, and getting it wrong is a systematic zero across a whole
     # family rather than a miss on one question. The Indian financial year is
     # labelled by the year it STARTS in throughout this corpus -- DOC-FS-2020 is
@@ -600,7 +648,7 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
     if re.search(r"(?:year|FY|period|quarter)\s+end(?:ed|ing)|as at\s+31\s*"
                  r"(?:st)?\s*March|ended\s+31\s*(?:st)?\s*March", q, re.I):
         years = sorted({y - 1 for y in years})
-    if len(years) == 1:
+    if len(years) == 1 and (_cols & {"year", "expiry_year", "acquired"}):
         if entity == "account":
             fy = [r["year"] for r in gr.entities["account"]
                   if str(years[0]) in str(r.get("year"))]
@@ -812,6 +860,17 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
             return {"entity": entity, "fn": "count", "field": field,
                     "filters": filters + [(field, "eq", bar)]}
 
+    # Two works named and an interval asked for between them: "how many days
+    # elapsed between the completion of A and the completion of B". Two rows,
+    # one date column, one subtraction -- no reduction over a single table can
+    # express it.
+    if entity == "work" and at == "days":
+        pair = _named_works(gr, q)
+        if len(pair) == 2:
+            return {"entity": "work", "filters": [], "fn": "sum",
+                    "field": "completed", "key": "work",
+                    "op": "datespan", "subjects": pair}
+
     # Two financial years named, and a movement asked for between them.
     if len(years) == 2 and entity in _YEARLY and re.search(
             r"\bmove\w*|\bchange\w*|\bdifference\b|\bgap\b|between|year[- ]on[- ]year"
@@ -848,10 +907,17 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
         if w:
             filters.append(("work", "eq", w))
         lead = _named_person(gr, q)
-        if lead and re.search(r"\bled\b|\bhas led\b|\bran\b|\bmanaged\b|\bheaded\b"
-                              r"|as project manager|\bdelivered\b|\bsigned off\b"
-                              r"|\bunder\b [A-Z]", q, re.I):
+        if lead and not any(f[0] == "lead" for f in filters) and re.search(
+                r"\bled\b|\bhas led\b|\bran\b|\bmanaged\b|\bheaded\b"
+                r"|as project manager|\bdelivered\b|\bsigned off\b"
+                r"|\bunder\b [A-Z]", q, re.I):
             filters.append(("lead", "eq", lead))
+            # A person's own deliveries span clients. Where the question scopes
+            # by the PERSON, a client resolved from elsewhere in the sentence is
+            # a different question -- and the released set's hop_aggregate
+            # family, which sums the CLIENT's whole portfolio, names its client
+            # explicitly, so it is unaffected.
+            filters = [f for f in filters if f[0] != "client"]
         if not any(f[0] == "category" for f in filters):
             c = _named_category(gr, q)
             if c:
@@ -867,6 +933,12 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
         else:
             field = "client"
 
+    seen, dedup = set(), []
+    for f in filters:
+        if f not in seen:
+            seen.add(f)
+            dedup.append(f)
+    filters = dedup
     if entity == "work" and not filters and not (estate or re.search(_ESTATE, q, re.I)):
         return None            # "every work we have ever done" is not an answer
     return {"entity": entity, "filters": filters, "fn": fn, "field": field}

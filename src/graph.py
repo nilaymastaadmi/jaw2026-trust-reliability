@@ -31,6 +31,7 @@ assets, accounts, invoices and BOQ items from finance.json. Derived fields
 (a work's state and year, a client's roll-ups) are computed once at load so
 that questions about them need no traversal.
 """
+import datetime
 import re
 import statistics
 
@@ -39,6 +40,13 @@ import corpus
 
 def _year(iso):
     return int(str(iso)[:4]) if iso and str(iso)[:4].isdigit() else None
+
+
+def _date(iso):
+    try:
+        return datetime.date.fromisoformat(str(iso)[:10])
+    except (TypeError, ValueError):
+        return None
 
 
 class Graph:
@@ -262,6 +270,10 @@ class Graph:
 
         self.entities["cv"] = [dict(c) for c in e.get("cvs", [])]
 
+        # The certificates carry the credential's EXPIRY, which build_db does
+        # not read: a validity span is arithmetic over two dates on one page.
+        self.entities["credential"] = [dict(c) for c in e.get("credentials", [])]
+
         self.entities["reference_letter"] = [dict(r) for r in e.get("reference_letters", [])]
 
         self.entities["dossier_standing"] = [dict(r) for r in e.get("dossier_standing", [])]
@@ -364,6 +376,17 @@ class Graph:
                 return None
             return abs(vals[1] - vals[0]) if plan.get("absolute", True) \
                 else vals[1] - vals[0]
+        if op == "datespan" and len(plan.get("subjects") or ()) == 2:
+            col, ent = plan.get("field", "completed"), plan["entity"]
+            got = []
+            for name in plan["subjects"]:
+                row = next((r for r in self.entities.get(ent, [])
+                            if r.get(plan.get("key", "work")) == name), None)
+                d = _date(row.get(col)) if row else None
+                if d is None:
+                    return None
+                got.append(d)
+            return abs((got[1] - got[0]).days)
         if op == "ratio" and plan.get("denominator"):
             num = self.run({**plan, "op": None})
             den = self.run({**plan, "op": None, "filters": plan["denominator"]})

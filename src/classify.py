@@ -900,6 +900,9 @@ _DOC_ENTITY = (
     r"|order book|credit notes?|variation orders?|principal clients?"
     r"|defect liability|date of joining|total experience|highest qualification"
     r"|curriculum vitae|financial standing|trade receivables ageing"
+    r"|according to the (?:client )?reference letter"
+    r"|reference letter[^.?]{0,24}(?:states|records|shows|gives|on file for)"
+    r"|(?:value|amount)[^.?]{0,20}stated (?:in|on|by)[^.?]{0,20}letter"
     r"|gross block|plant (?:and|&) machinery|asset register|safety[- ]certified"
     r"|trial balance")
 
