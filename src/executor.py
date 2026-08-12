@@ -542,7 +542,17 @@ def temporal_chain(db, person=None, credential=None, after=None, **_):
 
 
 def distinct_count(db, person=None, client=None, **_):
-    works = db.led_by(person) if person else db.portfolio(client)
+    """How many distinct work categories a person, or a client, covers.
+
+    Returns None -- not 0 -- when neither is resolved. A zero here is a real
+    number that travels to the submission and scores nothing, and worse, it
+    stops the compositional query from ever seeing the question: every count
+    question the named shapes cannot place was landing on this and coming back
+    0 instead of coming back empty.
+    """
+    works = db.led_by(person) if person else (db.portfolio(client) if client else [])
+    if not works:
+        return None
     return len({(w.get("category") or "").strip().lower() for w in works if w.get("category")})
 
 

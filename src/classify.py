@@ -854,6 +854,39 @@ def infer_answer_type(question):
     return "money"
 
 
+# Document types outside the works and the receivables. Named here rather than
+# imported from generic.py so that the decision to bypass the named shapes is
+# visible where the shapes are chosen.
+_DOC_ENTITY = (
+    r"\bbonds?\b|bank guarantee|performance guarantee|\bBND-\d+|guarantor"
+    r"|guaranteed exposure|guarantee percentage"
+    r"|non-?conformit|\bNCs\b|lead auditor|surveillance audit"
+    r"|\bISO\b|\b9001\b|\b14001\b|\b45001\b|certificate of registration"
+    r"|certification body|\bORG-\d{3,}"
+    r"|business units?\b|head-?counts?\b"
+    r"|tender dossier|bid value|\bRFP-\d+|earnest money|\bEMD\b"
+    r"|compliance matri|compliance checklist|eligibility criteri"
+    r"|minimum turnover|turnover requirement|site engineers|key technical staff"
+    r"|on rolls|owned assets"
+    r"|\bRA bills?\b|running account bill|\bAR-\d{4}-\d+|net claimed"
+    r"|retention @|retention amount|\bretention\b"
+    r"|final bill|contract\s*#\s*\d+|approved variations|revised value"
+    r"|bill of quantit|\bBOQ\b|earthwork|macadam|bituminous concrete"
+    r"|granular sub-?base|reinforcement steel"
+    r"|profit before tax|profit after tax|\bPBT\b|\bPAT\b"
+    r"|profit and loss|profit & loss|financial statements?\b"
+    r"|cost of materials|sub-?contracting|employee benefit"
+    r"|depreciation (?:and|&) amorti|amorti[sz]ation"
+    r"|other operating revenue|total expenses|reserves & surplus"
+    r"|revenue from operations|total revenue from"
+    r"|paid-?up capital|trade (?:receivable|payable)s?\b"
+    r"|bank statement|running balance|closing\s+(?:\w+\s+)?balance|current account"
+    r"|general ledger|ledger account|chart of accounts"
+    r"|board of directors|annual report"
+    r"|gross block|plant (?:and|&) machinery|asset register|safety[- ]certified"
+    r"|trial balance")
+
+
 def _negated(term, q):
     """Is every mention of `term` there only to rule it out?
 
@@ -1122,6 +1155,23 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     # a question about one client answered with the sum of all 155 works.
     plan["estate"] = bool(not client and not person and not clidx.mentioned(q)
                           and _has(_ESTATE, q))
+
+    # A question about a document type NO named shape reads. All 23 shapes work
+    # over the completed works and the receivables; a bond, a compliance matrix,
+    # an ISO certificate, an RA bill, a bank statement or a profit-and-loss line
+    # is not in either. Where the question plainly names one of those, every
+    # shape here is guaranteed wrong, and a guaranteed-wrong number scores zero
+    # while blocking the compositional query that could answer it. So the shape
+    # is left unset and the question goes to the graph.
+    #
+    # The vocabulary is deliberately narrow -- document names and their
+    # distinctive fields, not the words those documents happen to share with the
+    # certificates -- because a false positive here loses a question the tested
+    # path answers correctly.
+    if _has(_DOC_ENTITY, q):
+        plan["shape"] = None
+        plan["doc_entity"] = True
+        return plan
     if plan["estate"] and len(cats) == 1:
         plan["category"] = cats[0]
 

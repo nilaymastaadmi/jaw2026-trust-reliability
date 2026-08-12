@@ -42,17 +42,22 @@ def _year(iso):
 
 
 class Graph:
-    def __init__(self, db=None, fin=None):
+    def __init__(self, db=None, fin=None, est=None):
         self.db = db or corpus.load_json("db.json")
         try:
             self.fin = fin if fin is not None else corpus.load_json("finance.json")
         except Exception:
             self.fin = {}
+        try:
+            self.est = est if est is not None else corpus.load_json("estate.json")
+        except Exception:
+            self.est = {}
         self.entities = {}
         self._build_works()
         self._build_people()
         self._build_finance()
         self._build_clients()
+        self._build_estate()
 
     # ------------------------------------------------------------- builders
     def _build_works(self):
@@ -161,6 +166,95 @@ class Graph:
             })
         self.entities["client"] = out
 
+    def _build_estate(self):
+        """The nine document types parse_documents.py reads.
+
+        Rows are flattened to one level so that every question is a filter and a
+        reduction over a table -- an audit is a row, not a field of a
+        certificate, because "how many minor NCs did S. Kapoor raise" is a sum
+        over audits. The nesting is kept alongside for anything that needs it.
+        """
+        e = self.est
+        if not e:
+            return
+
+        def year_of(v):
+            return _year(v)
+
+        self.entities["bond"] = [{
+            **b, "year": year_of(b.get("issue_date")),
+            "expiry_year": year_of(b.get("valid_until")),
+        } for b in e.get("bonds", [])]
+
+        self.entities["compliance"] = [dict(c) for c in e.get("compliance", [])]
+
+        self.entities["iso_cert"] = [{k: v for k, v in c.items() if k != "audits"}
+                                     for c in e.get("iso_certs", [])]
+        self.entities["audit"] = [{**a, "cert_no": c.get("cert_no"),
+                                   "standard": c.get("standard"),
+                                   "year": year_of(a.get("date"))}
+                                  for c in e.get("iso_certs", [])
+                                  for a in c.get("audits", [])]
+
+        self.entities["dossier"] = [{k: v for k, v in d.items() if k != "units"}
+                                    for d in e.get("dossiers", [])]
+        # Business units repeat identically across the six dossiers; a question
+        # asking for head-count by unit wants six rows, not thirty-six.
+        seen, units = set(), []
+        for d in e.get("dossiers", []):
+            for u in d.get("units", []):
+                if u["unit"] in seen:
+                    continue
+                seen.add(u["unit"])
+                units.append(dict(u))
+        self.entities["business_unit"] = units
+
+        self.entities["fin_line"] = [
+            {"year": f.get("year"), "account": k,
+             "current": v.get("current"), "previous": v.get("previous"),
+             "balance": v.get("current"), "doc": f.get("doc")}
+            for f in e.get("financials", []) for k, v in (f.get("lines") or {}).items()]
+
+        self.entities["ra_bill"] = [{k: v for k, v in b.items() if k != "items"}
+                                    for b in e.get("ra_bills", [])]
+        self.entities["final_bill"] = [{k: v for k, v in b.items()
+                                        if k not in ("items", "bills")}
+                                       for b in e.get("final_bills", [])]
+        self.entities["boq_line"] = [
+            {**i, "contract": b.get("contract"), "client": b.get("client")}
+            for b in e.get("final_bills", []) for i in b.get("items", [])] + [
+            {**i, "contract": b.get("contract"), "client": b.get("client")}
+            for b in e.get("ra_bills", []) for i in b.get("items", [])]
+
+        self.entities["bank_txn"] = [{**r, "year": s.get("year"), "doc": s.get("doc")}
+                                     for s in e.get("bank", []) for r in s.get("rows", [])]
+        self.entities["bank_year"] = [{k: v for k, v in s.items() if k != "rows"}
+                                      for s in e.get("bank", [])]
+        self.entities["ledger_account"] = [
+            {k: v for k, v in a.items() if k != "rows"} | {"year": l.get("year")}
+            for l in e.get("ledgers", []) for a in l.get("accounts", [])]
+        self.entities["ledger_line"] = [
+            {**r, "account": a.get("account"), "code": a.get("code"),
+             "year": l.get("year")}
+            for l in e.get("ledgers", []) for a in l.get("accounts", [])
+            for r in a.get("rows", [])]
+
+        # The board is the same board in both annual reports, so listing it
+        # twice would answer "how many directors" with twelve.
+        seen, dirs = set(), []
+        for a in e.get("annual_reports", []):
+            for d in a.get("directors", []):
+                if d["name"] in seen:
+                    continue
+                seen.add(d["name"])
+                dirs.append({**d, "year": a.get("year")})
+        self.entities["director"] = dirs
+        self.entities["ar_line"] = [
+            {"year": a.get("year"), "account": k, "current": v.get("current"),
+             "previous": v.get("previous"), "balance": v.get("current")}
+            for a in e.get("annual_reports", [])
+            for k, v in (a.get("highlights") or {}).items()]
+
     # -------------------------------------------------------------- queries
     OPS = {
         "eq": lambda a, b: a == b,
@@ -217,6 +311,15 @@ class Graph:
             return None
         rows = self.select(plan["entity"], plan.get("filters"))
         if not rows:
+            # An empty selection is a real answer for a COUNT -- "how many
+            # bonds are still live" is zero, not unknown -- but only when every
+            # column the filters name actually exists. Filtering on a column
+            # the table does not have empties it for the wrong reason, and
+            # there the honest answer is nothing.
+            schema = set(self.entities.get(plan["entity"], [{}])[0])
+            if plan["fn"] == "count" and all(
+                    f[0] in schema for f in (plan.get("filters") or [])):
+                return 0
             return None
         return self.reduce(rows, plan["fn"], plan.get("field"))
 

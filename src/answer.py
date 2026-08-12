@@ -209,7 +209,8 @@ def _plan_one(db, q, catidx, clidx, overrides):
     # scoped to one client, so the best it can do there is a client-scoped zero
     # -- and a zero is a number, which displaces the classifier's plan and stops
     # the compositional query from ever seeing the question.
-    if not plan.get("estate") and executor.run(db, plan) is None:
+    if not plan.get("estate") and not plan.get("doc_entity") \
+            and executor.run(db, plan) is None:
         alt = router.route(db, q["question"], q.get("answer_type"))
         if executor.run(db, alt) is not None:
             plan = alt
