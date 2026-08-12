@@ -360,6 +360,8 @@ def _cat_pattern(cat):
 # (HV-IC-0436) names Roads Highways and Roads Maintenance but writes the second
 # one with the shared "roads" elided.
 _CAT_HINT = [
+    ("wtp", "Water Treatment"),
+    ("stp", "Sewerage Drainage"),
     ("maintenance", "Roads Maintenance"),
     ("epc", "Industrial Epc"),
     ("expressway", "Expressways"),
@@ -657,7 +659,9 @@ _AWARDED = (r"award(?:ed|s)?|sanction(?:ed)?|secured|contract value|contract tot
             r"|contract roll|committed|commitments|assigned|handed over|total scope"
             r"|total value|total project value|approved contract|full value"
             r"|value of (?:the |our |all )?complet\w+ works?|complet\w+[- ]works? value"
-            r"|value (?:we[' ]?(?:ve)? )?(?:delivered|completed)|delivered value")
+            r"|value (?:we[' ]?(?:ve)? )?(?:delivered|completed)|delivered value"
+            r"|what we(?:'ve| have)? delivered|completed portfolio value"
+            r"|portfolio value|delivered for\b")
 # Billed side of the same gap: what we put on an invoice.
 _BILLED = (r"billed|bill so far|invoice[ds]?|invoicing|submitted claims|claims we submitted"
            r"|formally claimed|successfully claimed|our bills|submitted claim|claimed"
@@ -686,6 +690,10 @@ _EXCLUDE = (r"excluding|except(?:\s+for)?|other than|apart from|but not|ignoring
             r"|taken out|take out|drop\b|dropping\b|strip(?:ping)? out|with[^.?]{0,20}removed"
             r"|not including|without counting|excl\.?|minus the|net of|stripped out"
             r"|leav(?:e|ing) aside|set(?:ting)? aside|put(?:ting)? aside|hold(?:ing)? back"
+            # NOT a bare `minus`: "awarded minus billed" is the unbilled-gap
+            # family, not an exclusion, and the word belongs to both.
+            r"|evaluated separately|assessed separately|counted separately"
+            r"|the rest of the|rest of (?:their|our|the)"
             r"|leav(?:e|ing)[^.?]{0,28}\bout\b|keep(?:ing)?[^.?]{0,28}\bout of\b"
             r"|take[^.?]{0,20}\bout\b|taken? out|pull(?:ing)?[^.?]{0,20}\bout\b"
             r"|strip(?:ping)? out|carve (?:that )?out|set aside|filter out|filter(?:ing)? out"
@@ -897,7 +905,7 @@ _DOC_ENTITY = (
     # shapes answer correctly -- the released set asks about reference letters
     # 40 times. A document-type term only belongs here if no shape wants it.
     r"|board of directors|annual report|segment revenue|seven-?year summary"
-    r"|order book|credit notes?|variation orders?|principal clients?"
+    r"|order book|how many credit notes|variation orders?|principal clients?"
     r"|segment revenue|segmental|receivables ageing|ageing annexure"
     r"|net turnover|annexure [A-D]\b"
     r"|defect liability|date of joining|total experience|highest qualification"
@@ -1068,7 +1076,9 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
         kept = {c for c, p in pos.items()
                 if re.search(r"^[^.?]{0,60}?(?:stays? in|remains? in|is kept|are kept"
                              r"|still counts?|separate line|does(?: not|n't) come out"
-                             r"|is not excluded)", text[p:], re.I)}
+                             r"|is not excluded|which we keep|we keep|keep(?:ing)? "
+                             r"(?:that|those|these|them))", text[p:], re.I)
+                or re.search(r"(?:not|excluding|except)\s*$", text[max(0, p - 12):p], re.I)}
         live = {c: p for c, p in pos.items() if c not in kept} or pos
         if len(live) == 1:
             return next(iter(live))
@@ -1376,6 +1386,13 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     if _has(_EXCLUDE, q) and cats:
         plan["shape"] = "exclusion_aggregate"
         plan["category"] = excluded_cat(client, cats)
+        # "Strip out the small buildings AND the water supply packages" strikes
+        # out two, and excluding only the first leaves the other one in.
+        if len(cats) > 1 and _has(r"\band\b|\bboth\b|\bas well as\b|\bplus\b", q):
+            keep = excluded_cat(client, cats)
+            others = [c for c in cats if c != keep]
+            if others and not _has(r"which we keep|we keep|stays? in|remains? in", q):
+                plan["categories_excluded"] = [keep] + others
         if not client or weak_client:
             plan["confidence"] = 0.0 if not client else 0.5
         return plan
@@ -1452,8 +1469,8 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     # verb says which side of the ledger is being asked for.
     _paid_in = _has(r"paid us|paid to us|has (?:actually )?paid|received|collected"
                     r"|receipts|cash (?:in|has come)|come in|cleared", q)
-    _inv_is_scope = _has(r"(?:across|over|among|on|from|against) (?:all |the )?"
-                         r"(?:our |their )?invoices\b", q)
+    _inv_is_scope = _has(r"(?:across|over|among|on|from|against)?\s*(?:all |the )"
+                         r"(?:our |their )?invoices\b|,\s*all invoices", q)
     if _has(r"\btotal\b|\bhow much\b|\baggregate\b|\bsum\b|\bgross\b"
             r"|what was actually invoiced|actually invoiced|ageing register", q) and \
             _has(r"invoiced|billed|invoices raised|raised on|invoices", q) and \

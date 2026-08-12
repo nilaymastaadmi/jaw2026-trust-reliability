@@ -296,7 +296,8 @@ def gap_to_threshold(db, client=None, threshold=None, **_):
     return max(0, threshold - sum(_vals(p)))
 
 
-def exclusion_aggregate(db, client=None, category=None, **_):
+def exclusion_aggregate(db, client=None, category=None,
+                        categories_excluded=None, **_):
     # Refuse rather than silently sum everything: with no category, _cat_match is
     # False for every work and this returns the FULL portfolio -- a confident,
     # badly wrong number. Returning None routes it to the logged fallback ladder.
@@ -312,11 +313,16 @@ def exclusion_aggregate(db, client=None, category=None, **_):
     # comparison; the loose matcher stays as the fallback for anything that is
     # not a known category.
     known = {(w.get("category") or "").strip().lower() for w in db.works}
-    term = (category or "").strip().lower()
-    if term in known:
+    # A question can strike out more than one: "strip out the small buildings
+    # and the water supply packages". Excluding only the first leaves the other
+    # in and the answer is quietly high.
+    terms = [(c or "").strip().lower()
+             for c in (categories_excluded or [category]) if c]
+    if all(t in known for t in terms):
         def excluded(w):
-            return (w.get("category") or "").strip().lower() == term
+            return (w.get("category") or "").strip().lower() in terms
     else:
+        term = terms[0]
         def excluded(w):
             return _cat_match(w, category)
     p = _folio(db, client)

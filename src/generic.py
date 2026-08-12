@@ -86,7 +86,9 @@ _ENTITY = [
     ("ledger_account", r"general ledger|ledger account|\bledger\b|posted line"
                        r"|chart of accounts|voucher"),
     ("order_book", r"order book|contracts? (?:remained |still )?in execution"
-                   r"|credit notes?|variation orders?|awarded value at year"),
+                   r"|how many credit notes|credit notes?[^.?]{0,30}"
+                   r"(?:absorbed|annual report|aggregating)"
+                   r"|variation orders?|awarded value at year"),
     ("director", r"board of directors|\bdirectors?\b|board composition"),
     # A credential named by its ID, or asked about as a document rather than
     # as the bar a portfolio is measured against -- which is what the released
