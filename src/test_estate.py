@@ -35,7 +35,9 @@ def main():
     fail = []
 
     def check(name, ok, detail=""):
-        print(f"  {'PASS' if ok else 'FAIL'}  {name}{'   ' + detail if detail else ''}")
+        # Detail only on failure: printed next to a PASS it reads as one.
+        print(f"  {'PASS' if ok else 'FAIL'}  {name}"
+              f"{'   ' + detail if (detail and not ok) else ''}")
         if not ok:
             fail.append(name)
 
@@ -102,6 +104,13 @@ def main():
 
     print("\n--- bank statements: the running balance is consistent ---")
     for s in est["bank"]:
+        # The year as a whole, not just row to row: opening plus everything in
+        # less everything out must equal the closing balance. The row-by-row
+        # check passed while the FIRST transaction was misclassified, because
+        # it started comparing at the second row.
+        check(f"{s['doc']} opening + in - out = closing",
+              near(s["opening"] + s["deposits"] - s["withdrawals"], s["closing"], 2),
+              f"{s['opening']} + {s['deposits']} - {s['withdrawals']} != {s['closing']}")
         rows, bad = s["rows"], 0
         for i in range(1, len(rows)):
             prev, cur = rows[i - 1]["balance"], rows[i]

@@ -251,16 +251,31 @@ _FIELD_CUES = {
                  (r".", "current")],
     "ar_line": [(r"previous year|prior year|comparative", "previous"),
                 (r".", "current")],
-    "ra_bill": [(r"\bgst\b|\btax\b", "gst"),
+    "ra_bill": [(r"retention[^.?]{0,24}(?:percent|%|rate|out of 100)"
+                 r"|percent\w*[^.?]{0,24}retention", "retention_pct"),
+                (r"\bgst\b[^.?]{0,24}(?:percent|%|rate)|percent\w*[^.?]{0,16}gst",
+                 "gst_pct"),
+                (r"\bgst\b|\btax\b", "gst"),
                 (r"retention", "retention"),
                 (r"net claimed|net of|claimed", "net_claimed"),
                 (r"cumulative", "cumulative"),
                 (r"value of work|work done|executed", "value_of_work")],
     "final_bill": [(r"how many RA|RA bills?[^.?]{0,20}(?:raised|against|total)"
                     r"|number of RA", "ra_count"),
+                   # The gap against the REVISED value is a different column
+                   # from the gap against the awarded value, and a question
+                   # that says to IGNORE the revised figure wants neither.
+                   (r"(?<!ignore )(?<!ignore the )revised[^.?]{0,30}"
+                    r"(?:gap|difference|versus|against|and the value)"
+                    r"|(?:gap|difference)[^.?]{0,30}revised", "revised_gap"),
+                   # "awarded value LESS the total billed" is the same
+                   # question as "the gap between awarded and billed"; the
+                   # subtraction can be written as a preposition.
                    (r"gap|difference|less than|shortfall|under-?run|minus"
-                    r"|exceed|versus|\bvs\b|against", "gap"),
-                   (r"revised", "revised"),
+                    r"|exceed|versus|\bvs\b|against"
+                    r"|awarded[^.?]{0,30}\bless\b|\bless\b\s+the\s+(?:total\s+)?bill",
+                    "gap"),
+                   (r"(?<!ignore )(?<!ignore the )\brevised\b", "revised"),
                    (r"variation", "variations"),
                    (r"awarded|award\b|sanction", "awarded"),
                    (r"billed|executed|actually", "executed")],
@@ -271,7 +286,10 @@ _FIELD_CUES = {
                  (r"withdraw|paid out|outflow|debit", "withdrawal"),
                  (r"deposit|received|inflow|credit|came in", "deposit"),
                  (r"balance", "balance")],
-    "bank_year": [(r"closing|balance", "closing"),
+    "bank_year": [(r"net (?:movement|figure|change|cash)|movement in cash"
+                   r"|deposits? (?:less|minus)|subtract[^.?]{0,30}withdraw", "net_movement"),
+                  (r"\bopening\b", "opening"),
+                  (r"closing|balance", "closing"),
                   (r"deposit|received|inflow", "deposits"),
                   (r"withdraw|outflow|paid out", "withdrawals")],
     "ledger_account": [(r"closing|balance", "closing"), (r"total|sum", "total")],
@@ -647,7 +665,7 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
         # bills.
         counts_rows = fn != "min" and not cued and bool(rownoun and re.search(
             r"(?:how many|number of|(?<!head-)(?<!head )count of)"
-            r"\s+(?:\w+\s+){0,3}?(?:" + rownoun + r")",
+            r"\s+(?:\w+\s+){0,6}?(?:" + rownoun + r")",
             q, re.I))
         if rownoun is not None or fn not in ("min", "max"):
             fn = "count" if (counts_rows or field not in _COUNT_COL) else "sum"
@@ -927,6 +945,41 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
                                          r"|\bat\b|\bof\b", q, re.I):
             return {"entity": entity, "fn": "count", "field": field,
                     "filters": filters + [(field, "eq", bar)]}
+
+    # Two numeric COLUMNS of the same rows, subtracted: "subtract total
+    # withdrawals from total deposits". Distinct from subtracting two values of
+    # one column -- here the rows are the same and the columns differ.
+    if re.search(r"\bsubtract\b|\bminus\b|\bnet (?:figure|movement|of)\b|\bless\b",
+                 q, re.I):
+        # A key is numeric and is not a quantity. "For contract #73 ... awarded
+        # value less the value billed" names `contract`, and subtracting a
+        # contract NUMBER from an awarded value is not an answer. Columns being
+        # used to select rows are excluded, which is the same rule that makes
+        # the field chooser work.
+        num_cols = [c for c in _cols
+                    if c in (sch.numeric.get(entity, ()) if sch else ())
+                    and c not in selecting
+                    and not re.fullmatch(r"contract|ra|year|code|n|id|\w*_id"
+                                         r"|\w*_no|acquired|expiry_year", c)]
+        hit = []
+        for c in sorted(num_cols, key=len, reverse=True):
+            words = [w for w in re.split(r"[_\s]+", c) if len(w) > 3]
+            if not words:
+                continue
+            m = re.search(r"(?<![\w])" + r"\s*".join(re.escape(w) for w in words)
+                          + r"s?(?![\w])", q, re.I)
+            if m and all(o[1] != c for o in hit):
+                hit.append((m.start(), c))
+        hit.sort()
+        if len(hit) == 2:
+            a, b = hit[0][1], hit[1][1]
+            if re.search(r"subtract[^.?]{0,40}\bfrom\b", q, re.I):
+                a, b = b, a
+            signed = re.search(r"negative|signed|net figure|preserve the sign"
+                               r"|in that order", q, re.I)
+            return {"entity": entity, "fn": "sum", "field": a, "op": "diff",
+                    "absolute": not signed, "filters": filters,
+                    "subtrahend": filters, "field_b": b}
 
     # Two values of ONE categorical column with a subtraction between them.
     if re.search(r"\bsubtract\b|\bminus\b|\bless\b the|take away|deduct", q, re.I):

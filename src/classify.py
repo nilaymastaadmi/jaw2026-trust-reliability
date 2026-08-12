@@ -1518,10 +1518,12 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     # the top two and every released question of that family says "second"; a
     # question asking only for the biggest one has no shape at all, and fell to
     # the client's whole portfolio total.
-    if _has(r"\bsingle\b[^.?]{0,30}(?:largest|highest|biggest|smallest|lowest)"
+    if _has(r"\bsingle\b[^.?]{0,70}(?:largest|highest|biggest|smallest|lowest)"
             r"|(?:largest|highest|biggest|smallest|lowest)\s+(?:single|individual)"
-            r"|which (?:single |one )?\w{0,12}\s*(?:work|project|contract)[^.?]{0,30}"
-            r"(?:highest|largest|biggest|smallest|lowest)", q) and \
+            r"|\bwhich\b[^.?]{0,70}(?:carries|has|states|records|shows)[^.?]{0,20}"
+            r"(?:the )?(?:highest|largest|biggest|smallest|lowest)"
+            r"|\bwhich\b[^.?]{0,60}(?:highest|largest|biggest|smallest|lowest)"
+            r"[^.?]{0,30}(?:value|amount|cost|revenue|balance)", q) and \
             not _has(r"second|next|two largest|top two|gap|difference|minus|exceed", q):
         plan["shape"] = None
         plan["doc_entity"] = True          # hand it to the compositional query

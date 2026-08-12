@@ -424,6 +424,14 @@ def bank_statements():
     for doc in _docs("DOC-BANK-"):
         t = _text(doc)
         fy = re.search(r"FY\s*(\d{4})", t)
+        # The opening balance is a one-figure row, so the two-figure pattern
+        # drops it -- and without it the FIRST transaction has nothing to
+        # compare against and is read as a deposit whichever way it went.
+        # 51,167,788 taking the balance from 465,282,353 to 414,114,565 is a
+        # payment out, and calling it a deposit put the year's net movement out
+        # by twice the transaction.
+        ob = re.search(r"Opening balance b/f\s*\n\s*([\d,]+)", t)
+        opening = _num(ob.group(1)) if ob else 0
         rows = []
         for m in _BANK_TWO.finditer(t):
             rows.append({"date": m.group(1), "particulars": " ".join(m.group(2).split()),
@@ -437,16 +445,18 @@ def bank_statements():
             # Two columns only: an amount and the running balance. Which column
             # the amount belongs to is settled by whether the balance rose.
             amt, bal = _num(m.group(3)), _num(m.group(4))
-            prev = rows[-1]["balance"] if rows else 0
+            prev = rows[-1]["balance"] if rows else opening
             rose = bal is not None and prev is not None and bal > prev
             rows.append({"date": m.group(1), "particulars": " ".join(m.group(2).split()),
                          "withdrawal": None if rose else amt,
                          "deposit": amt if rose else None, "balance": bal})
         rows.sort(key=lambda r: r["date"])
         out.append({"doc": doc, "year": int(fy.group(1)) if fy else None,
-                    "rows": rows,
+                    "rows": rows, "opening": opening,
                     "deposits": sum(r["deposit"] or 0 for r in rows),
                     "withdrawals": sum(r["withdrawal"] or 0 for r in rows),
+                    "net_movement": ((rows[-1]["balance"] - opening)
+                                     if rows else None),
                     "closing": rows[-1]["balance"] if rows else None})
     return out
 

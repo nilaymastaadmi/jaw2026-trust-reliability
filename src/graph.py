@@ -396,7 +396,8 @@ class Graph:
             # completed Tunnels works and subtract the total value of completed
             # Expressways works" -- one table, one column, two selections.
             a = self.run({**plan, "op": None})
-            b = self.run({**plan, "op": None, "filters": plan["subtrahend"]})
+            b = self.run({**plan, "op": None, "filters": plan["subtrahend"],
+                          "field": plan.get("field_b", plan.get("field"))})
             if a is None or b is None:
                 return None
             return abs(a - b) if plan.get("absolute") else a - b
