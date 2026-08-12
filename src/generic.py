@@ -41,6 +41,15 @@ _ENTITY = [
                  r"|issued by (?:a|the|another) body|accredited bod(?:y|ies)"),
     ("business_unit", r"business unit|head-?count by|per unit head|unit head-?count"
                       r"|\bunits?\b[^.?]{0,20}head-?count"),
+    ("segment", r"segment revenue|revenue by (?:work )?categor|segmental"
+                r"|by segment|segment(?:al)? (?:analysis|performance|commentary)"),
+    ("ageing", r"receivables ageing|ageing annexure|ageing (?:table|bucket)"
+               r"|(?:more|greater|older) than 12 months|6\s*(?:-|to|\u2013)\s*12 months"
+               r"|largest (?:total )?outstanding|outstanding by client"),
+    ("principal_client", r"principal clients?|clients? by billings|largest share of billings"
+                         r"|top clients? by"),
+    ("dossier_standing", r"financial[- ]standing|annexure c\b|net turnover"
+                         r"|gross billings[^.?]{0,30}dossier|dossier[^.?]{0,30}gross billings"),
     ("compliance", r"\bmatri(?:x|ces)\b|compliance checklist|eligibility"
                    r"|requirements? (?:met|complied|satisfied)|complied\b"
                    r"|checklist|minimum turnover|turnover requirement"
@@ -72,6 +81,7 @@ _ENTITY = [
                   r"|total (?:deposits?|withdrawals?)|year-end balance"),
     ("bank_txn", r"bank statement|withdrawal|deposit|running balance"
                  r"|current account|statement of account|single transaction"),
+    ("account", r"trial balance|\bTB\b account|per the trial balance"),
     ("ledger_account", r"general ledger|ledger account|\bledger\b|posted line"
                        r"|chart of accounts|voucher"),
     ("director", r"board of directors|\bdirectors?\b|board composition"),
@@ -125,6 +135,8 @@ _FIELD = {
     "account": "balance", "boq_item": "amount", "client": "value",
     "person": "value_led",
     "bond": "amount", "compliance": "complied", "iso_cert": "validity_days",
+    "segment": "current", "ageing": "total", "principal_client": "billings",
+    "dossier_standing": "net_profit",
     "credential": "validity_days", "cv": "tenure_days",
     "company_cert": "value", "reference_letter": "value",
     "audit": "minor", "dossier": "bid_value", "business_unit": "headcount",
@@ -222,6 +234,8 @@ _FIELD_CUES = {
                 (r"relevant works|past performance", "relevant_works"),
                 (r"bid|value|worth|total", "bid_value")],
     "business_unit": [(r"head-?count|people|staff|employees|strength", "headcount")],
+    "dossier_standing": [(r"gross billing", "gross_billings"),
+                         (r"turnover", "net_turnover"), (r".", "net_profit")],
     "fin_line": [(r"previous year|prior year|comparative|year before", "previous"),
                  (r".", "current")],
     "ar_line": [(r"previous year|prior year|comparative", "previous"),
@@ -353,6 +367,21 @@ def _named_work(gr, q):
             mm = re.search(r"Pkg[\s\-_]*(\d{1,3})", r.get("work") or "", re.I)
             if mm and int(mm.group(1)) == want:
                 return r["work"]
+    # Title plus state, where the package number is deliberately withheld:
+    # "the RCC Bridge project in Gujarat, never mind the package number". Four
+    # works are called RCC Bridge and the state separates them.
+    for r in gr.entities.get("work", []):
+        t = r.get("work") or ""
+        base = re.sub(r"\s*[\u2014\u2013-]\s*[A-Za-z ]+Pkg[\s\-_]*\d+\s*$", "", t).strip()
+        st = r.get("state")
+        if not (len(base) > 6 and st):
+            continue
+        if re.search(r"(?<![\w])" + re.escape(base) + r"(?![\w])", q, re.I) and \
+                re.search(r"(?<![\w])" + re.escape(st) + r"(?![\w])", q, re.I):
+            same = [o for o in gr.entities.get("work", [])
+                    if (o.get("work") or "").startswith(base) and o.get("state") == st]
+            if len(same) == 1:
+                return same[0]["work"]
     best = None
     for r in gr.entities.get("work", []):
         t = r.get("work") or ""
@@ -901,6 +930,15 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
                     "filters": base + [("account", "eq", named[0][1])],
                     "denominator": base + [("account", "eq", named[1][1])]}
 
+    # A work named in a question about a document ABOUT that work selects the
+    # document's row: "the reference letter on file for the Pipeline Laying
+    # project in Delhi -- what value does it state".
+    if entity in ("reference_letter", "company_cert") and \
+            not any(f[0] == "work" for f in filters):
+        w = _named_work(gr, q)
+        if w:
+            filters.append(("work", "eq", w))
+
     # A named work, which identifies exactly one row.
     if entity == "work":
         w = _named_work(gr, q)
@@ -912,11 +950,14 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
                 r"|as project manager|\bdelivered\b|\bsigned off\b"
                 r"|\bunder\b [A-Z]", q, re.I):
             filters.append(("lead", "eq", lead))
-            # A person's own deliveries span clients. Where the question scopes
-            # by the PERSON, a client resolved from elsewhere in the sentence is
-            # a different question -- and the released set's hop_aggregate
-            # family, which sums the CLIENT's whole portfolio, names its client
-            # explicitly, so it is unaffected.
+        # A person's own deliveries span clients, so where the question scopes
+        # by the PERSON a client inferred from elsewhere is a different
+        # question. Applied to whatever put the lead filter there -- the schema
+        # value matcher finds a person's name on its own and would otherwise
+        # skip the block that drops the client.
+        if any(f[0] == "lead" for f in filters) and re.search(
+                r"\bhas led\b|\bled\b|as project manager|\bdelivered\b"
+                r"|\bran\b|\bheaded\b|\bmanaged\b", q, re.I):
             filters = [f for f in filters if f[0] != "client"]
         if not any(f[0] == "category" for f in filters):
             c = _named_category(gr, q)
@@ -939,6 +980,12 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
             seen.add(f)
             dedup.append(f)
     filters = dedup
-    if entity == "work" and not filters and not (estate or re.search(_ESTATE, q, re.I)):
-        return None            # "every work we have ever done" is not an answer
+    # A reduction over an ENTIRE table, with nothing selected, is an answer
+    # only when the question asked for exactly that. Otherwise it is a lookup
+    # whose subject was not found, and summing all 132 reference letters is a
+    # confident wrong number where the ladder would have earned partial credit.
+    if not filters and fn != "count" and len(gr.entities.get(entity, [])) > 20 \
+            and not (estate or re.search(_ESTATE, q, re.I)
+                     or re.search(_AGG_WORD, q, re.I)):
+        return None
     return {"entity": entity, "filters": filters, "fn": fn, "field": field}

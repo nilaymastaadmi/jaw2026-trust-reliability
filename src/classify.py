@@ -898,6 +898,8 @@ _DOC_ENTITY = (
     # 40 times. A document-type term only belongs here if no shape wants it.
     r"|board of directors|annual report|segment revenue|seven-?year summary"
     r"|order book|credit notes?|variation orders?|principal clients?"
+    r"|segment revenue|segmental|receivables ageing|ageing annexure"
+    r"|net turnover|annexure [A-D]\b"
     r"|defect liability|date of joining|total experience|highest qualification"
     r"|curriculum vitae|financial standing|trade receivables ageing"
     r"|according to the (?:client )?reference letter"
@@ -1523,6 +1525,21 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     #     HS-IC-0007 and HS-IC-0008: both sum every one of the client's works,
     #     not the subset the named person led.
     if person and client:
+        # ...but only where the CLIENT is what the question scopes by. HS-IC-0007
+        # and HS-IC-0008 name their client outright and ask for everything
+        # delivered to it; the person is only the route there. A question that
+        # names no client at all and asks what one PERSON has led is a different
+        # question with a different answer -- Rahul Das led 1,523,400,000 of
+        # Mahanadi Steel's 3,296,200,000 -- and answering it with the client's
+        # whole portfolio is confidently wrong. The separator is where the
+        # client came from: inferred from the person, or named.
+        if plan.get("client_via") in ("person", "person-first-work") and _has(
+                r"\bhas led\b|\bhe led\b|\bshe led\b|\bthey led\b|led several"
+                r"|\bled as\b|as project manager|\bhas delivered\b"
+                r"|everything \w+ has|works? \w+ has led", q):
+            plan["shape"] = None            # the graph scopes this by `lead`
+            plan["person_scoped"] = True
+            return plan
         plan["shape"] = "hop_aggregate"
         if weak_client:
             plan["confidence"] = 0.5
