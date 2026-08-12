@@ -711,6 +711,70 @@ _VERB_MEAN = re.compile(
     r"|really\s+|actually\s+|just\s+|probably\s+|certainly\s+)?means?\b", re.I)
 
 
+# Words that decide the SHAPE rather than a parameter. Each one, misspelt, does
+# not degrade the answer -- it changes which question is being answered. A
+# single slip in `average` turns a per-work average into a portfolio total, an
+# eightfold error, and there is no partial credit in it. So the question is read
+# through a copy in which a token one edit from one of these, and nothing else,
+# has been corrected. The list is deliberately short: these are the words the
+# ladder actually branches on.
+_PIVOT = ("average", "median", "mean", "total", "reference", "excluding",
+          "difference", "between", "completed", "client", "clients", "value",
+          "works", "outstanding", "invoiced", "received", "billed", "largest",
+          "smallest", "percentage", "collected", "combined", "category",
+          "portfolio", "credential", "threshold", "shortfall", "delivered",
+          "amount", "unbilled", "balance", "contract", "biggest", "second",
+          "portion", "charges", "handover", "categories", "projects", "please")
+_PIVOT_SET = set(_PIVOT)
+
+
+def _edit1(a, b):
+    """One insertion, deletion, substitution -- or one adjacent transposition.
+
+    Transposition has to be in here. `totla` for `total` and `amoutn` for
+    `amount` are two substitutions apart under plain edit distance, and
+    transposing a pair is the commonest typing slip there is; without it half
+    the near-misses go uncorrected.
+    """
+    la, lb = len(a), len(b)
+    if abs(la - lb) > 1:
+        return False
+    if la == lb:
+        diff = [i for i, (x, y) in enumerate(zip(a, b)) if x != y]
+        if len(diff) == 1:
+            return True
+        return (len(diff) == 2 and diff[1] == diff[0] + 1
+                and a[diff[0]] == b[diff[1]] and a[diff[1]] == b[diff[0]])
+    if la > lb:
+        a, b, la, lb = b, a, lb, la
+    i = 0
+    while i < la and a[i] == b[i]:
+        i += 1
+    return a[i:] == b[i + 1:]
+
+
+def despell(q):
+    """The question with near-misses of the pivot words corrected.
+
+    Only a token that is one edit from exactly ONE pivot word, and is not itself
+    a pivot word, is touched -- and only from five characters up, so ordinary
+    short words cannot be pulled into the vocabulary.
+    """
+    def fix(m):
+        w = m.group(0)
+        lw = w.lower()
+        if len(lw) < 5 or lw in _PIVOT_SET:
+            return w
+        # A singular/plural pair is not a typo, and correcting one into the
+        # other silently rewrites the question: "their total PROJECT value" is
+        # an awarded operand, "projects value" is not, and one edit separates
+        # them. Morphological variants are left exactly as written.
+        hits = [p for p in _PIVOT
+                if _edit1(lw, p) and lw.rstrip("s") != p.rstrip("s")]
+        return hits[0] if len(hits) == 1 else w
+    return re.sub(r"[A-Za-z]+", fix, q)
+
+
 def _has(pat, q):
     return bool(re.search(pat, q, re.I))
 
@@ -854,7 +918,7 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     family needs was mined, and 0.0 otherwise. answer.py escalates only the
     zeroes, so the number is a triage flag rather than a probability.
     """
-    q = question
+    q = despell(question)
     catidx = catidx or CategoryIndex({w["category"] for w in db.works if w.get("category")})
     clidx = clidx or ClientIndex(db.all_clients())
 

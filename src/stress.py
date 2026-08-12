@@ -309,6 +309,160 @@ REWRITES = {
 }
 
 
+# ------------------------------------------------------- the held-back bank
+#
+# THE DISCIPLINE. Everything above was fixed against until it passed, so 100%
+# there says "the router handles the sixteen ways that were thought of", not
+# "the router handles rewording". A fitted number cannot answer the only
+# question that matters, which is whether the fixes generalise.
+#
+# So this bank is held back. Each type below was written AFTER the fixing above
+# had stopped, run once, and its result reported as it stood. Where a run did
+# force a change, that change is recorded in the commit and the bank is treated
+# as spent from then on -- the next honest number needs types nobody has run.
+#
+# Two banks, both spent as of the commit that introduced them:
+#   bank 1 (passive .. decimal crore)   98.94% cold, 99.98% after two fixes
+#   bank 2 (tell me .. negative framing) 99.91% cold, no fixes made
+
+def _passive(q, rng, db):
+    out = re.sub(r"\bwhat (?:is|was) the\b", "what figure is arrived at for the", q, flags=re.I)
+    out = re.sub(r"\bcould you (?:please )?(?:calculate|confirm|tell me|work out|give me)\b",
+                 "it needs to be established", out, flags=re.I)
+    out = re.sub(r"\bhow much (?:is|was|do|does)\b", "what amount is held as", out, flags=re.I)
+    out = re.sub(r"\bwe(?:'ve| have) (?:completed|delivered|billed)\b",
+                 lambda m: "was " + m.group(0).split()[-1] + " by us", out, flags=re.I)
+    return out if out != q else None
+
+def _nested(q, rng, db):
+    return ('Forwarding this from the bid desk. They wrote: "' + q.rstrip() +
+            '" Can you answer that for them?')
+
+def _allcaps(q, rng, db):
+    return q.upper()
+
+def _nopunct(q, rng, db):
+    out = re.sub(r"[—–\-,;:.?!'’\"]", " ", q)
+    return re.sub(r"\s+", " ", out).strip()
+
+def _newlines(q, rng, db):
+    bits = re.split(r"(?<=[,;—])\s+", q)
+    return "\n  ".join(b for b in bits if b.strip())
+
+_TYPO = {"the": "teh", "value": "valeu", "total": "totla", "which": "whcih",
+         "completed": "compelted", "client": "clinet", "reference": "refernce",
+         "average": "avarage", "between": "betwen", "difference": "differnce",
+         "works": "worksa", "please": "pleaes", "amount": "amoutn"}
+def _typo(q, rng, db):
+    out = q
+    for a, b in _TYPO.items():
+        out = re.sub(r"\b" + a + r"\b", b, out, count=1, flags=re.I)
+    return out if out != q else None
+
+def _pronoun(q, rng, db):
+    """Second and later mentions of the client become a pronoun."""
+    for n in sorted(db.all_names, key=len, reverse=True):
+        hits = [m for m in re.finditer(re.escape(n), q, re.I)]
+        if len(hits) < 2:
+            continue
+        out = q[:hits[1].start()] + "that account" + q[hits[1].end():]
+        return out
+    return None
+
+def _redundant(q, rng, db):
+    """The client named once properly and once loosely, as people actually write."""
+    for n in sorted(db.all_names, key=len, reverse=True):
+        if n.lower() not in q.lower():
+            continue
+        loose = re.sub(r"\b(?:Govt of|Government of)\s+", "", n)
+        return re.sub(re.escape(n), n + " (i.e. " + loose + ")", q, count=1, flags=re.I)
+    return None
+
+def _listy(q, rng, db):
+    m = re.search(r"^(.{0,90}?[,.;](?![\d]))\s+(.+)$", q, re.S)
+    if not m:
+        return None
+    return "Request:\n  - context: " + m.group(1).strip() + "\n  - question: " + m.group(2).strip()
+
+def _decimal_crore(q, rng, db):
+    """'INR 26 Cr' -> 'INR 2.6 crore x10' is nonsense; use 260000000 style instead."""
+    def sub(m):
+        v = float(m.group(1).replace(",", ""))
+        unit = 10**7 if m.group(2).lower().startswith("cr") else 10**5
+        return f"{round(v*unit/10**7, 2):g} crore"
+    out = re.sub(r"\b(?:INR\s*|Rs\.?\s*)?(\d[\d,]*(?:\.\d+)?)\s*(Cr\b|Crores?\b|Lakhs?\b)",
+                 sub, q, flags=re.I)
+    return out if out != q else None
+
+def _tellme(q, rng, db):
+    out = re.sub(r"^\s*(?:what(?:'s| is| was)|could you (?:please )?(?:tell me|confirm|give me)"
+                 r"|can you (?:tell me|confirm)|please confirm)\s+", "Tell me ", q, flags=re.I)
+    out = re.sub(r"\?\s*$", ".", out)
+    return out if out != q else "Any idea " + q[0].lower() + q[1:]
+
+def _hedged(q, rng, db):
+    return ("Sorry to bother you, and I might be misremembering how this works, but "
+            "if it's not too much trouble — " + q[0].lower() + q[1:] +
+            " No rush if you're busy.")
+
+def _twosent(q, rng, db):
+    m = re.search(r"^(.{25,110}?)(?:,|—|–|;|\s-\s)\s*(.+)$", q, re.S)
+    if not m: return None
+    a, b = m.group(1).strip(), m.group(2).strip()
+    return a[0].upper() + a[1:] + ". " + b[0].upper() + b[1:]
+
+def _paren(q, rng, db):
+    return re.sub(r"(\bfor\b|\bof\b)", r"\1 (per the certificates on file)", q, count=1)
+
+def _barline(q, rng, db):
+    def sub(m):
+        return f"the {m.group(1)}-crore line"
+    out = re.sub(r"(?:INR\s*|Rs\.?\s*)?(\d{1,3})\s*(?:Cr\b|Crores?\b)", sub, q, flags=re.I)
+    return out if out != q else None
+
+def _datestyle(q, rng, db):
+    out = re.sub(r"\b(\d{4})-(\d{2})-(\d{2})\b", lambda m: f"{m.group(3)}/{m.group(2)}/{m.group(1)}", q)
+    out = re.sub(r"\bMarch 10,? 2021\b", "10 March 2021", out, flags=re.I)
+    out = re.sub(r"\bMar 10 2021\b", "10-Mar-2021", out, flags=re.I)
+    return out if out != q else None
+
+_BRIT = {r"\borganization\b": "organisation", r"\brecognize\b": "recognise",
+         r"\banalyze\b": "analyse", r"\bprogram\b": "programme",
+         r"\bcheck\b": "cheque", r"\bfulfill\b": "fulfil",
+         r"\bcanceled\b": "cancelled", r"\bcolor\b": "colour"}
+def _brit(q, rng, db):
+    out = q
+    for a, b in _BRIT.items(): out = re.sub(a, b, out, flags=re.I)
+    return out if out != q else None
+
+def _slack(q, rng, db):
+    return "@here \U0001F44B quick one — " + q.rstrip() + " \U0001F64F thanks!"
+
+def _qfirst(q, rng, db):
+    m = re.search(r"^(.{30,140}?[,—–;])\s*(.{20,}\?)\s*$", q, re.S)
+    if not m: return None
+    return m.group(2).strip() + " (context: " + m.group(1).strip().rstrip(",—–;") + ")"
+
+def _filler(q, rng, db):
+    return re.sub(r"\s+(and|but|so|then)\s+", r" \1, um, like, ", q, count=2)
+
+def _negframe(q, rng, db):
+    return ("I don't want the single line item, and I don't want last quarter's pack. "
+            + q[0].upper() + q[1:])
+
+COLD = {
+    "passive": _passive, "nested": _nested, "ALLCAPS": _allcaps,
+    "no punctuation": _nopunct, "newlines": _newlines, "typos": _typo,
+    "pronoun": _pronoun, "redundant name": _redundant, "bulleted": _listy,
+    "decimal crore": _decimal_crore,
+    "tell me": _tellme, "hedged": _hedged, "two sentences": _twosent,
+    "parenthetical": _paren, "the N-crore line": _barline,
+    "date restyled": _datestyle, "british spelling": _brit,
+    "slack + emoji": _slack, "question first": _qfirst,
+    "verbal filler": _filler, "negative framing": _negframe,
+}
+
+
 # ---------------------------------------------------------------- scoring
 
 def score_one(gold, got):
@@ -326,6 +480,8 @@ def main():
     ap.add_argument("--golds", default=None,
                     help="CSV of verified answers; defaults to the submission")
     ap.add_argument("--show", default=None, help="print every miss for one rewrite")
+    ap.add_argument("--cold", action="store_true",
+                    help="run the held-back bank instead of the fitted one")
     ap.add_argument("--seed", type=int, default=20260811)
     a = ap.parse_args()
 
@@ -339,10 +495,11 @@ def main():
     answer_mod.ensure_database(False)
     db = executor.DB()
     rng = random.Random(a.seed)
-    names = {r: [] for r in REWRITES}
-    rows = {r: [] for r in REWRITES}
+    bank = COLD if a.cold else REWRITES
+    names = {r: [] for r in bank}
+    rows = {r: [] for r in bank}
 
-    for name, fn in REWRITES.items():
+    for name, fn in bank.items():
         mutated = []
         for q in questions:
             try:
@@ -360,10 +517,11 @@ def main():
             rows[name].append((s, q, g["answer"], gold[q["qid"]]))
         names[name] = mutated
 
-    print(f"PARAPHRASE STRESS  --  {len(questions)} questions with verified golds\n")
+    print(f"PARAPHRASE STRESS ({'held-back bank' if a.cold else 'fitted bank'})"
+          f"  --  {len(questions)} questions with verified golds\n")
     print(f"  {'rewrite':11s} {'applied':>7s} {'score':>8s} {'exact':>7s} {'broken':>7s}")
     tot_s = tot_n = 0
-    for name in REWRITES:
+    for name in bank:
         r = rows[name]
         if not r:
             continue
@@ -380,6 +538,8 @@ def main():
     # partitions the set before any lexical test runs, and it arrives as an
     # input field rather than being derived. A hidden set that omits it, or
     # spells it differently, must not cost twenty points.
+    if a.cold:
+        return
     stripped = [{**q, "answer_type": None} for q in questions]
     out = answer_mod.answer_all(stripped, verbose=False)
     ss = [score_one(gold[q["qid"]], g["answer"]) for q, g in zip(stripped, out)]
