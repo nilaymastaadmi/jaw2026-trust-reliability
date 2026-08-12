@@ -134,6 +134,25 @@ def ensure_database(verbose=True):
             # every other family is unaffected. Better than refusing to run.
             print(f"[setup] workbook parse failed ({e}); "
                   f"receivable questions will use the fallback ladder", file=sys.stderr)
+    # The other 312 documents -- bonds, compliance matrices, ISO certificates,
+    # dossiers, financial statements, RA bills, bank statements, ledgers,
+    # annual reports, the contractor's certificate copies, the CVs and the
+    # reference letters. work/ is not committed, so on a clean clone this is
+    # the ONLY thing that builds them: without it the store holds 7 tables and
+    # 1,203 rows instead of 32 and 4,812, and every question about those
+    # documents is answered by the fallback ladder. Failing here must not stop
+    # the run -- the works and the receivables are unaffected by it.
+    if not (corpus.WORK / "estate.json").exists():
+        if verbose:
+            print("[setup] work/estate.json missing - parsing the document estate",
+                  file=sys.stderr)
+        try:
+            import parse_documents
+            parse_documents.build(verbose=verbose)
+        except Exception as e:
+            print(f"[setup] estate parse failed ({e}); questions about bonds, "
+                  f"certificates, statements and ledgers will use the fallback "
+                  f"ladder", file=sys.stderr)
 
 
 def answer_all(questions, verbose=True):
@@ -219,6 +238,27 @@ def _plan_one(db, q, catidx, clidx, overrides):
     return plan
 
 
+# What a number of each unit can plausibly be in THIS corpus. The guard exists
+# because a wrong unit is not a near-miss: answering a `days` question with a
+# rupee sum scores zero and is unbounded, where the fallback ladder's typical
+# value of the right unit earns partial credit. Bounds are deliberately loose --
+# this catches category errors, it does not calibrate.
+_UNIT_RANGE = {
+    "count": (0, 2000),          # 155 works, 519 invoices, 486 people
+    "days": (0, 25000),          # the corpus spans 2010-2026
+    "percent": (-1000.0, 1000.0),
+    "money": (-1e13, 1e13),
+}
+
+
+def _unit_ok(answer_type, value):
+    lo, hi = _UNIT_RANGE.get((answer_type or "money").lower(), _UNIT_RANGE["money"])
+    try:
+        return lo <= float(value) <= hi
+    except (TypeError, ValueError):
+        return False
+
+
 def _run_one(db, plan, q, medians, gr=None, sch=None):
     got = executor.run(db, plan)
     if got is not None:
@@ -234,6 +274,20 @@ def _run_one(db, plan, q, medians, gr=None, sch=None):
                               estate=bool(plan.get("estate")), sch=sch)
             if gp:
                 got = gr.run(gp)
+                # The unit guard is re-imposed HERE. classify.py partitions on
+                # answer_type before it routes, but the document path returns
+                # ahead of that partition, so the graph can hand back a rupee
+                # sum for a `days` question at full confidence -- and a wrong
+                # unit is not a near-miss, it scores zero and is unbounded,
+                # where the ladder's typical value of the right unit earns
+                # partial credit.
+                #
+                # Fabricated zeros are stopped at source in graph.run: an empty
+                # selection returns None unless every filtered column exists,
+                # in which case a count of nothing really is nothing. Screening
+                # zeros again here would discard those real answers.
+                if got is not None and not _unit_ok(q.get("answer_type"), got):
+                    got = None
                 if got is not None:
                     return got, "graph:" + gp["entity"] + "/" + gp["fn"]
         except Exception as e:

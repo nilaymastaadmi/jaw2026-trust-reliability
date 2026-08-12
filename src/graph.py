@@ -377,9 +377,12 @@ class Graph:
             # column the filters name actually exists. Filtering on a column
             # the table does not have empties it for the wrong reason, and
             # there the honest answer is nothing.
-            schema = set(self.entities.get(plan["entity"], [{}])[0])
+            table = self.entities.get(plan["entity"])
+            if not table:
+                return None        # no such table: an empty count is fabricated
+            cols = set(table[0])
             if plan["fn"] == "count" and all(
-                    f[0] in schema for f in (plan.get("filters") or [])):
+                    f[0] in cols for f in (plan.get("filters") or [])):
                 return 0
             return None
         return self.reduce(rows, plan["fn"], plan.get("field"))
