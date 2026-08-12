@@ -892,7 +892,14 @@ _DOC_ENTITY = (
     r"|paid-?up capital|trade (?:receivable|payable)s?\b"
     r"|bank statement|running balance|closing\s+(?:\w+\s+)?balance|current account"
     r"|general ledger|ledger account|chart of accounts"
-    r"|board of directors|annual report"
+    # Deliberately NOT here: `reference letter`, `CV`, `ageing`. Each names a
+    # document type, and each is also core vocabulary of a family the tested
+    # shapes answer correctly -- the released set asks about reference letters
+    # 40 times. A document-type term only belongs here if no shape wants it.
+    r"|board of directors|annual report|segment revenue|seven-?year summary"
+    r"|order book|credit notes?|variation orders?|principal clients?"
+    r"|defect liability|date of joining|total experience|highest qualification"
+    r"|curriculum vitae|financial standing|trade receivables ageing"
     r"|gross block|plant (?:and|&) machinery|asset register|safety[- ]certified"
     r"|trial balance")
 

@@ -502,6 +502,219 @@ def annual_reports():
     return out
 
 
+# ------------------------------------------------ company completion certificates
+
+# The client's certificate records the work; the CONTRACTOR's copy records what
+# happens after it -- the defect liability period, in days and as an expiry
+# date. Nothing else in the corpus carries either.
+_DLP = re.compile(r"defect liability period of (\d+) days from the date of completion"
+                  r"(?:\s*\(i\.e\.,? until (\d{4}-\d{2}-\d{2})\))?", re.I)
+
+
+def company_certs():
+    out = []
+    for doc in _docs("DOC-CCC-"):
+        f = _flat(_text(doc))
+        work = re.search(r"Project Name\s+(.+?)\s+Client\s", f)
+        client = re.search(r"\sClient\s+(.+?)\s*\((?:Government|Private|PSU)\)", f)
+        val = re.search(r"Contract Value\s+((?:INR|Rs\.?)\s*[\d.,]+\s*(?:Cr|Crore|Lakh)s?)", f, re.I)
+        comp = re.search(r"Completion Date\s+(\d{4}-\d{2}-\d{2})", f)
+        pm = re.search(r"Project Manager\s+(.+?)\s+\d\.", f)
+        cat = re.search(r"Work Category\s+(.+?)\s+Contract Value", f)
+        d = _DLP.search(f)
+        dlp_days = int(d.group(1)) if d else None
+        dlp_until = d.group(2) if (d and d.group(2)) else None
+        # Second template ("RECORD OF WORK COMPLETED"): a flat label/value list
+        # that states the defect liability END DATE rather than a duration. Half
+        # the 155 use it, and the duration is the difference of two dates it
+        # already prints.
+        if work is None:
+            work = re.search(r"\sWork\s+(.+?)\s+Client\s", f)
+            client = re.search(r"\sClient\s+(.+?)\s*\((?:government|private|psu)\)", f, re.I)
+            cat = re.search(r"\sCategory\s+(.+?)\s+Executed Value", f)
+            val = re.search(r"Executed Value\s+((?:INR|Rs\.?)\s*[\d.,]+\s*(?:Cr|Crore|Lakh)s?)", f, re.I)
+            comp = re.search(r"\sCompletion\s+(\d{2}/\d{2}/\d{4}|\d{4}-\d{2}-\d{2})", f)
+            pm = re.search(r"Project Lead\s+(.+?)\s+Defect Liability", f)
+            ends = re.search(r"Defect Liability Ends\s+(\d{2}/\d{2}/\d{4}|\d{4}-\d{2}-\d{2})", f)
+            dc = normalize.parse_date(comp.group(1)) if comp else None
+            de = normalize.parse_date(ends.group(1)) if ends else None
+            if de:
+                dlp_until = de.isoformat()
+            if dc and de:
+                dlp_days = (de - dc).days
+            if dc:
+                comp = type("M", (), {"group": staticmethod(lambda i, v=dc.isoformat(): v)})
+        out.append({
+            "doc": doc,
+            "work": work.group(1).strip() if work else None,
+            "client": client.group(1).strip() if client else None,
+            "category": cat.group(1).strip() if cat else None,
+            "value": _money(val.group(1)) if val else None,
+            "completed": comp.group(1) if comp else None,
+            "manager": pm.group(1).strip() if pm else None,
+            "defect_liability_days": dlp_days,
+            "defect_liability_until": dlp_until,
+        })
+    return out
+
+
+# ------------------------------------------------------------------------ CVs
+
+_CV_FIELDS = ["Name", "Employee ID", "Designation", "Business Unit",
+              "Total Experience", "Qualification", "Date of Joining", "Wage Group"]
+
+
+def cvs():
+    """The 39 key-personnel CVs. Nothing else states a joining date or a
+    qualification, and both are asked about directly."""
+    out = []
+    for doc in _docs("DOC-CV-"):
+        t = _text(doc)
+        rec = {"doc": doc}
+        for lab in _CV_FIELDS:
+            v = _after(t, lab, r"(.+)")
+            key = lab.lower().replace(" ", "_")
+            rec[key] = v.strip() if v else None
+        exp = re.search(r"(\d+)\s*years?", rec.get("total_experience") or "")
+        rec["experience_years"] = int(exp.group(1)) if exp else None
+        doj = normalize.parse_date(rec.get("date_of_joining") or "")
+        rec["joined"] = doj.isoformat() if doj else None
+        # Tenure to the corpus's own "as at" date, which every document uses.
+        rec["tenure_days"] = ((normalize.parse_date("2026-03-31") - doj).days
+                              if doj else None)
+        out.append(rec)
+    return out
+
+
+# ------------------------------------------------------------ reference letters
+
+def reference_letters():
+    """The 132 client reference letters.
+
+    Each states the work, its contract value as the CLIENT records it, and the
+    completion date. 40 of them state a validity of the literal word `High` or
+    `Medium` -- a leaked category label where a duration was intended -- which
+    is worth recording as what it is rather than discarding.
+    """
+    out = []
+    for doc in _docs("DOC-REF-"):
+        f = _flat(_text(doc))
+        ref = re.search(r"Our ref:\s*(\S+)", f)
+        work = re.search("work\\s*[\u201c\"']([^\u201d\"']+)[\u201d\"']", f)
+        val = re.search(r"\(((?:INR|Rs\.?)\s*[\d.,]+\s*(?:Cr|Crore|Lakh)s?)\)", f, re.I)
+        comp = re.search(r"completed on ([\d]{1,2} \w{3} \d{4}|\d{4}-\d{2}-\d{2})", f, re.I)
+        valid = re.search(r"valid for a period of\s+(\w+)", f, re.I)
+        # Second template ("To whomsoever it may concern"): the work, value and
+        # completion date are a label/value block rather than a sentence.
+        if work is None:
+            work = re.search(r"Work Executed\s+(.+?)\s+Value\s", f)
+        if val is None:
+            val = re.search(r"\sValue\s+((?:INR|Rs\.?)\s*[\d.,]+\s*(?:Cr|Crore|Lakh)s?)", f, re.I)
+        if comp is None:
+            comp = re.search(r"\sCompleted\s+(\d{2}/\d{2}/\d{4}|\d{4}-\d{2}-\d{2})", f)
+        client = _text(doc).strip().split("\n")[0].strip()
+        letter_date = re.search(r"(\d{1,2} \w{3} \d{4})", f)
+        d = normalize.parse_date(comp.group(1)) if comp else None
+        out.append({
+            "doc": doc,
+            "our_ref": ref.group(1) if ref else None,
+            "client": client or None,
+            "work": work.group(1).strip() if work else None,
+            "value": _money(val.group(1)) if val else None,
+            "completed": d.isoformat() if d else None,
+            "year": d.year if d else None,
+            "validity": valid.group(1) if valid else None,
+            "letter_date": letter_date.group(1) if letter_date else None,
+        })
+    return out
+
+
+# ------------------------------------------- annual report tables (beyond the head)
+
+_SEG = re.compile(r"^([A-Z][A-Za-z &]{2,32})\n(-?[\d,]+)\n(-?[\d,]+)$", re.M)
+_SEVEN = re.compile(r"^(\d{4})[\u2013-]\d{2}\n(-?[\d,]+)\n(-?[\d,]+)\n(-?[\d,]+)\n(-?[\d.]+)%$", re.M)
+_AGE = re.compile(r"^([A-Z][A-Za-z ,&.'-]{5,60})\n(-?[\d,]+)\n(-?[\d,]+)\n(-?[\d,]+)\n(-?[\d,]+)$", re.M)
+_CLI = re.compile(r"^([A-Z][A-Za-z ,&.'-]{5,60})\n(-?[\d,]+)$", re.M)
+
+
+def _section(t, start, end=None):
+    i = t.find(start)
+    if i < 0:
+        return ""
+    j = t.find(end, i + len(start)) if end else -1
+    return t[i:j if j > 0 else i + 12000]
+
+
+def annual_tables():
+    """Segment revenue, the seven-year summary, the ageing annexure and the
+    principal-clients table. All four are tables the head of the report only
+    summarises, and all four are asked about directly."""
+    out = []
+    for doc in _docs("DOC-AR-"):
+        t = _text(doc)
+        fy = re.search(r"FY\s*(\d{4})", t)
+        f = _flat(t)
+        seg_txt = _section(t, "SEGMENT REVENUE", "PRINCIPAL CLIENTS")
+        segments = [{"segment": m.group(1).strip(), "current": _num(m.group(2)),
+                     "previous": _num(m.group(3))} for m in _SEG.finditer(seg_txt)
+                    if m.group(1).strip().lower() not in ("segment", "client")]
+        seven = [{"year": int(m.group(1)), "gross_billings": _num(m.group(2)),
+                  "net_revenue": _num(m.group(3)), "profit": _num(m.group(4)),
+                  "margin": float(m.group(5))}
+                 for m in _SEVEN.finditer(_section(t, "SEVEN-YEAR FINANCIAL SUMMARY",
+                                                   "ANNEXURE"))]
+        ageing = [{"client": m.group(1).strip(), "lt6": _num(m.group(2)),
+                   "m6_12": _num(m.group(3)), "gt12": _num(m.group(4)),
+                   "total": _num(m.group(5))}
+                  for m in _AGE.finditer(_section(t, "TRADE RECEIVABLES AGEING"))]
+        cli_txt = _section(t, "PRINCIPAL CLIENTS", "Order inflow")
+        clients = [{"client": m.group(1).strip(), "billings": _num(m.group(2))}
+                   for m in _CLI.finditer(cli_txt)
+                   if m.group(1).strip().lower() not in ("client", "billings gross")]
+        contracts = re.search(r"(\d+) contracts remained in execution", f)
+        awarded = re.search(r"aggregate awarded value of (Rs\.?\s*[\d,.]+\s*Lakh)", f, re.I)
+        variations = re.search(r"approved variations of (Rs\.?\s*[\d,.]+\s*Lakh)"
+                               r"\s*across (\d+) variation orders", f, re.I)
+        credits = re.search(r"(\d+) credit notes\s*aggregating\s*(Rs\.?\s*[\d,.]+\s*Lakh)", f, re.I)
+        out.append({
+            "doc": doc, "year": int(fy.group(1)) if fy else None,
+            "segments": segments, "seven_year": seven,
+            "ageing": ageing, "principal_clients": clients,
+            "contracts_in_execution": int(contracts.group(1)) if contracts else None,
+            "order_book_awarded": _money(awarded.group(1)) if awarded else None,
+            "variation_orders": int(variations.group(2)) if variations else None,
+            "variations_value": _money(variations.group(1)) if variations else None,
+            "credit_notes": int(credits.group(1)) if credits else None,
+            "credit_notes_value": _money(credits.group(2)) if credits else None,
+        })
+    return out
+
+
+# --------------------------------------------------- dossier financial standing
+
+_STANDING = re.compile(r"^(\d{4})[\u2013-]\d{2}\n"
+                       r"((?:INR|Rs\.?)\s*[-\d.,]+(?:\s*(?:Cr|Crore|Lakh)s?)?)\n"
+                       r"((?:INR|Rs\.?)\s*[-\d.,]+(?:\s*(?:Cr|Crore|Lakh)s?)?)\n"
+                       r"((?:INR|Rs\.?)\s*[-\d.,]+(?:\s*(?:Cr|Crore|Lakh)s?)?)$", re.M)
+
+
+def dossier_standing():
+    """Annexure C of each dossier: gross billings, net turnover and net profit
+    per financial year. Stated in a mix of crore and raw rupees within the same
+    column, so each cell is read on its own terms."""
+    out = []
+    for doc in _docs("DOC-DOSSIER-"):
+        t = _text(doc)
+        rfp = re.search(r"(RFP-\d+)", t)
+        for m in _STANDING.finditer(t):
+            out.append({"doc": doc, "rfp_ref": rfp.group(1) if rfp else None,
+                        "year": int(m.group(1)),
+                        "gross_billings": _money(m.group(2)),
+                        "net_turnover": _money(m.group(3)),
+                        "net_profit": _money(m.group(4))})
+    return out
+
+
 # ------------------------------------------------------------------- driver
 
 def build(verbose=True):
@@ -516,6 +729,11 @@ def build(verbose=True):
         "bank": bank_statements(),
         "ledgers": ledgers(),
         "annual_reports": annual_reports(),
+        "company_certs": company_certs(),
+        "cvs": cvs(),
+        "reference_letters": reference_letters(),
+        "annual_tables": annual_tables(),
+        "dossier_standing": dossier_standing(),
     }
     corpus.WORK.mkdir(parents=True, exist_ok=True)
     (corpus.WORK / "estate.json").write_text(

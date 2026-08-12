@@ -20,6 +20,7 @@ import executor
 import classify
 import generic
 import graph
+import schema
 import router
 
 
@@ -158,9 +159,10 @@ def answer_all(questions, verbose=True):
     classify.set_state_tokens(db)
     try:
         gr = graph.Graph()
+        sch = schema.Schema(gr.entities)
     except Exception as e:
         print(f"[graph] unavailable ({e}); named shapes only", file=sys.stderr)
-        gr = None
+        gr = sch = None
     catidx = classify.CategoryIndex({w["category"] for w in db.works if w.get("category")})
     clidx = classify.ClientIndex(db.all_clients())
 
@@ -181,7 +183,7 @@ def answer_all(questions, verbose=True):
             q = {**q, "answer_type": classify.infer_answer_type(q.get("question") or "")}
         try:
             plan = _plan_one(db, q, catidx, clidx, overrides)
-            got, source = _run_one(db, plan, q, medians, gr)
+            got, source = _run_one(db, plan, q, medians, gr, sch)
         except Exception as e:
             # One unparseable question must not cost the other 332. Emit a
             # corpus-typical value of the right unit and record why.
@@ -217,7 +219,7 @@ def _plan_one(db, q, catidx, clidx, overrides):
     return plan
 
 
-def _run_one(db, plan, q, medians, gr=None):
+def _run_one(db, plan, q, medians, gr=None, sch=None):
     got = executor.run(db, plan)
     if got is not None:
         return got, "router"
@@ -229,7 +231,7 @@ def _run_one(db, plan, q, medians, gr=None):
         try:
             gp = generic.plan(db, gr, q["question"], q.get("answer_type"),
                               plan.get("client"), plan.get("category"),
-                              estate=bool(plan.get("estate")))
+                              estate=bool(plan.get("estate")), sch=sch)
             if gp:
                 got = gr.run(gp)
                 if got is not None:

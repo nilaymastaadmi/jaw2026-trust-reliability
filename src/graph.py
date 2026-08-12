@@ -181,9 +181,14 @@ class Graph:
         def year_of(v):
             return _year(v)
 
+        # A bond states a guarantee AND the percentage of contract value it
+        # represents, so the contract value it secures is arithmetic the
+        # document already contains.
         self.entities["bond"] = [{
             **b, "year": year_of(b.get("issue_date")),
             "expiry_year": year_of(b.get("valid_until")),
+            "contract_value": (round(b["amount"] / (b["guarantee_pct"] / 100))
+                               if b.get("amount") and b.get("guarantee_pct") else None),
         } for b in e.get("bonds", [])]
 
         self.entities["compliance"] = [dict(c) for c in e.get("compliance", [])]
@@ -249,6 +254,36 @@ class Graph:
                 seen.add(d["name"])
                 dirs.append({**d, "year": a.get("year")})
         self.entities["director"] = dirs
+        # The contractor's own copy of each completion certificate. Same 155
+        # works, independently stated -- which is what lets the two be
+        # cross-checked -- plus the defect liability period, which appears
+        # nowhere else in the corpus.
+        self.entities["company_cert"] = [dict(c) for c in e.get("company_certs", [])]
+
+        self.entities["cv"] = [dict(c) for c in e.get("cvs", [])]
+
+        self.entities["reference_letter"] = [dict(r) for r in e.get("reference_letters", [])]
+
+        self.entities["dossier_standing"] = [dict(r) for r in e.get("dossier_standing", [])]
+
+        # The annual reports' four tables, each a table in its own right: the
+        # head of the report only summarises them.
+        self.entities["segment"] = [
+            {**sgm, "year": a.get("year")}
+            for a in e.get("annual_tables", []) for sgm in a.get("segments", [])]
+        self.entities["seven_year"] = [
+            dict(r) for a in e.get("annual_tables", [])[-1:] for r in a.get("seven_year", [])]
+        self.entities["ageing"] = [
+            {**r, "year": a.get("year")}
+            for a in e.get("annual_tables", [])[-1:] for r in a.get("ageing", [])]
+        self.entities["principal_client"] = [
+            {**r, "year": a.get("year")}
+            for a in e.get("annual_tables", [])[-1:] for r in a.get("principal_clients", [])]
+        self.entities["order_book"] = [
+            {k: v for k, v in a.items()
+             if k not in ("segments", "seven_year", "ageing", "principal_clients")}
+            for a in e.get("annual_tables", [])]
+
         self.entities["ar_line"] = [
             {"year": a.get("year"), "account": k, "current": v.get("current"),
              "previous": v.get("previous"), "balance": v.get("current")}

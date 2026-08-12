@@ -23,6 +23,7 @@ but cannot change an answer the tested path already produces.
 import re
 
 import normalize
+import schema
 
 # Entity vocabulary. Order matters: the first entity whose words appear wins,
 # so the specific ones are listed before `work`, which is the default subject of
@@ -154,7 +155,27 @@ _WORK_EVIDENCE = (r"\bworks?\b|\bprojects?\b|\bcontracts?\b|\bassignments?\b"
 # Which COLUMN of an entity a question is asking for. The entity says which
 # table; this says which number in it. Ordered, first match wins.
 _FIELD_CUES = {
-    "bond": [(r"\bdays?\b|validity|valid for|how long|in force|expiry", "validity_days"),
+    "cv": [(r"experience|years? in the (?:industry|business)", "experience_years"),
+           (r"tenure|been with|since joining|days.{0,20}(?:with|at) (?:the |us)?"
+            r"|date of joining|how long", "tenure_days")],
+    "reference_letter": [(r"\bvalue\b|worth|contract value|amount", "value")],
+    "company_cert": [(r"defect liability|liability period|\bDLP\b", "defect_liability_days"),
+                     (r"\bvalue\b|worth|contract", "value")],
+    "segment": [(r"previous year|prior year|comparative", "previous"), (r".", "current")],
+    "seven_year": [(r"gross billing", "gross_billings"), (r"margin", "margin"),
+                   (r"profit", "profit"), (r"revenue|net revenue", "net_revenue")],
+    "ageing": [(r"(?:more|greater|older) than 12|over 12|> ?12|beyond a year", "gt12"),
+               (r"6\s*(?:-|to|\u2013)\s*12", "m6_12"),
+               (r"(?:less|under|within) (?:than )?6|< ?6", "lt6"), (r".", "total")],
+    "principal_client": [(r".", "billings")],
+    "dossier_standing": [(r"gross billing", "gross_billings"),
+                         (r"turnover", "net_turnover"), (r".", "net_profit")],
+    "order_book": [(r"credit note", "credit_notes"),
+                   (r"variation", "variation_orders"),
+                   (r"awarded|order book", "order_book_awarded"),
+                   (r"contract", "contracts_in_execution")],
+    "bond": [(r"contract value|implied|secures|5% of", "contract_value"),
+             (r"\bdays?\b|validity|valid for|how long|in force|expiry", "validity_days"),
              (r"stamp", "stamp_value"),
              (r"percentage|per ?cent\b|\bpct\b|what (?:%|percent)", "guarantee_pct"),
              (r"amount|exposure|guarantee[ds]?\b|value|worth|total", "amount")],
@@ -300,6 +321,73 @@ _YEARLY = {"fin_line", "ar_line", "account", "ledger_account", "bank_year",
            "bank_txn", "ledger_line"}
 
 
+def _named_work(gr, q):
+    """The completed work the question names, by package number or by title.
+
+    Package numbers are the one globally unique join key in this corpus -- work
+    TITLES are not, with four different "RCC Bridge" works across four states --
+    so the number is tried first and the title only where it identifies one row.
+    """
+    m = re.search(r"\bPkg[\s\-_]*(\d{1,3})\b", q, re.I)
+    if m:
+        want = int(m.group(1))
+        for r in gr.entities.get("work", []):
+            mm = re.search(r"Pkg[\s\-_]*(\d{1,3})", r.get("work") or "", re.I)
+            if mm and int(mm.group(1)) == want:
+                return r["work"]
+    best = None
+    for r in gr.entities.get("work", []):
+        t = r.get("work") or ""
+        base = re.sub(r"\s*[\u2014\u2013-]\s*[A-Za-z ]+Pkg[\s\-_]*\d+\s*$", "", t).strip()
+        for cand in (t, base):
+            if len(cand) > 8 and re.search(r"(?<![\w])" + re.escape(cand) + r"(?![\w])",
+                                           q, re.I):
+                if best is None or len(cand) > len(best[0]):
+                    best = (cand, t)
+    if not best:
+        return None
+    # A title that matches more than one work identifies none of them.
+    hits = [r["work"] for r in gr.entities.get("work", [])
+            if (r.get("work") or "").startswith(best[0])]
+    return best[1] if len(hits) == 1 else None
+
+
+def _named_person(gr, q):
+    """A person named in full, or by a part-name unique among the 39."""
+    names = [r.get("name") for r in gr.entities.get("person", []) if r.get("name")]
+    for nm in sorted(names, key=len, reverse=True):
+        if re.search(r"(?<![\w])" + re.escape(nm) + r"(?![\w])", q, re.I):
+            return nm
+    for part in (0, -1):
+        owners = {}
+        for nm in names:
+            bits = nm.split()
+            if len(bits) > 1:
+                owners.setdefault(bits[part].lower(), []).append(nm)
+        found = [v[0] for k, v in owners.items()
+                 if len(v) == 1 and len(k) > 3
+                 and re.search(r"(?<![\w])" + re.escape(k) + r"(?![\w])", q, re.I)]
+        if len(found) == 1:
+            return found[0]
+    return None
+
+
+def _named_category(gr, q):
+    """A work category named in the question, in either rendering.
+
+    The corpus writes "Bridges & Flyovers" in the annual report and the
+    workbooks and "Bridges Flyovers" on the completion certificates; questions
+    use both, and either spelling has to reach the same rows.
+    """
+    cats = {r.get("category") for r in gr.entities.get("work", []) if r.get("category")}
+    for c in sorted(cats, key=len, reverse=True):
+        parts = [re.escape(w) for w in c.split()]
+        pat = r"(?<![\w])" + r"\s*(?:&|and)?\s*".join(parts) + r"(?![\w])"
+        if re.search(pat, q, re.I):
+            return c
+    return None
+
+
 def _first(pairs, text):
     for name, pat in pairs:
         if re.search(pat, text, re.I):
@@ -321,7 +409,9 @@ def _first(pairs, text):
 _NO_SHAPE = {"asset", "boq_item", "bond", "compliance", "iso_cert", "audit",
              "dossier", "business_unit", "fin_line", "ra_bill", "final_bill",
              "boq_line", "bank_txn", "bank_year", "ledger_account",
-             "ledger_line", "director", "ar_line"}
+             "ledger_line", "director", "ar_line",
+             "company_cert", "cv", "reference_letter", "dossier_standing",
+             "segment", "seven_year", "ageing", "principal_client", "order_book"}
 
 # Works are covered by 23 shapes -- but every one of them is scoped to a single
 # client. A question about the WHOLE estate ("across the completed-works record,
@@ -335,12 +425,31 @@ _ESTATE = (r"across (?:the|our|all)|whole (?:completed|estate|record|portfolio|b
            r"|overall(?: total)?|forget one client|any client|all clients")
 
 
-def plan(db, gr, question, answer_type=None, client=None, category=None, estate=False):
+def plan(db, gr, question, answer_type=None, client=None, category=None,
+         estate=False, sch=None):
     """-> {entity, filters, fn, field} or None when the question is not placeable."""
     q = _drop_contrast(question)
     at = (answer_type or "").lower()
 
+    # WHICH TABLE. Two independent votes, because neither source is reliable
+    # alone. The schema matcher reads the question against the DATA MODEL --
+    # table names, column names, and the values the categorical columns
+    # actually hold -- so it needs no vocabulary written down and reaches
+    # questions nobody anticipated. The pattern list below encodes wording that
+    # names a table without using any of its own words ("gross block", "ageing
+    # register"), which the schema cannot know. Summing the two lets either
+    # carry a question the other misses, and agreement settles the rest.
     entity = _first(_ENTITY, q)
+    if sch is not None:
+        allowed = set(_NO_SHAPE) | {"work"}
+        ranked = sch.rank(q, allowed=allowed)
+        scored = [(s + (1.0 if e == entity else 0.0), e) for s, e in ranked]
+        if entity in allowed and not any(e == entity for _, e in ranked):
+            scored.append((1.0, entity))
+        # Only where the pattern list has nothing: the two disagree often
+        # enough that overriding a positive match measurably loses ground.
+        if scored and entity is None:
+            entity = max(scored)[1]
     # A business unit named outright beats any pattern: "the head-count of the
     # Special Projects Division" names one of six and nothing else in the
     # estate answers it. Checked against the store rather than a word list, so
@@ -353,8 +462,19 @@ def plan(db, gr, question, answer_type=None, client=None, category=None, estate=
                 break
     if entity is None and estate and re.search(_WORK_EVIDENCE, q, re.I):
         entity = "work"                        # estate-wide, and about the works
-    if entity == "work" and client is None and (estate or re.search(_ESTATE, q, re.I)):
-        pass                                   # estate-wide: no shape can run
+    if entity == "work":
+        # The 23 shapes are all scoped to a client and all sum a portfolio, so
+        # a question about ONE work, or about a category, a year, a state or a
+        # person's own deliveries, has nothing that can run -- which is why
+        # this is reached at all: the graph is only consulted after every named
+        # shape has returned nothing.
+        #
+        # The condition is that the query be SPECIFIC. A plan with no filter at
+        # all is "every work we have ever done", which is almost never what an
+        # unplaceable question wanted, and answering it confidently costs more
+        # than the fallback ladder's corpus-typical guess. So `work` is allowed
+        # through here and checked for a real filter at the end.
+        pass
     elif entity not in _NO_SHAPE:
         # Either the question is about something a shape already covers, or the
         # entity was not named at all. Both are better served by the ladder.
@@ -363,15 +483,38 @@ def plan(db, gr, question, answer_type=None, client=None, category=None, estate=
 
     # Which COLUMN, before which reduction: whether `how many` counts rows or
     # sums a column depends on what column the question named.
-    field = _FIELD.get(entity, "value")
+    # WHICH COLUMN. The column whose NAME the question matches is the strongest
+    # evidence available and needs nothing written down. The cue list is kept
+    # only for what a column name cannot express -- "how many are NOT met" is
+    # the `not_complied` column, and no amount of reading `complied` gets there.
+    # The columns this question is using to SELECT rows. Computed here, ahead of
+    # the filters themselves, because the column being asked for is never one of
+    # them and excluding them is what makes the match usable at all.
+    selecting = set()
+    if sch is not None:
+        selecting = {c for c, _ in sch.value_hits(entity, q)}
+    if client:
+        selecting.add("client")
+    if category:
+        selecting.add("category")
+    if re.search(r"(?:\b|FY\s*)(?:19|20)\d{2}", q):
+        selecting |= {"year", "expiry_year", "acquired"}
+    # Cues first, because where one applies it encodes a distinction a column
+    # name cannot ("how many are NOT met"). The schema matcher then covers the
+    # columns nobody wrote a cue for -- measured net-neutral on a held-out set,
+    # which is the right trade for a mechanism whose whole purpose is the
+    # questions nobody anticipated.
+    field = None
+    for pat, f in _FIELD_CUES.get(entity, ()):
+        if re.search(pat, q, re.I):
+            field = f
+            break
+    if field is None and sch is not None:
+        field = sch.best_column(entity, q, exclude=selecting)
+    if field is None:
+        field = _FIELD.get(entity, "value")
     if at == "days" and entity == "iso_cert":
         field = "validity_days"
-    cues = _FIELD_CUES.get(entity)
-    if cues:
-        for pat, f in cues:
-            if re.search(pat, q, re.I):
-                field = f
-                break
 
     # answer_type is the strongest signal about the reduction, and it overrides
     # loose wording: "how much plant do we have" reads as a sum but a `count`
@@ -449,6 +592,14 @@ def plan(db, gr, question, answer_type=None, client=None, category=None, estate=
     # "FY2022-23" carries no word boundary before the digits, so a plain year
     # pattern finds nothing in exactly the questions that name two of them.
     years = sorted({int(y) for y in re.findall(r"(?:\b|FY\s*)((?:19|20)\d{2})", q)})
+    # A CONVENTION, and getting it wrong is a systematic zero across a whole
+    # family rather than a miss on one question. The Indian financial year is
+    # labelled by the year it STARTS in throughout this corpus -- DOC-FS-2020 is
+    # FY2020-21 -- but a question naming it by the year it ENDS ("for the year
+    # ended 31 March 2021", "as at 31 March 2026") means the year before.
+    if re.search(r"(?:year|FY|period|quarter)\s+end(?:ed|ing)|as at\s+31\s*"
+                 r"(?:st)?\s*March|ended\s+31\s*(?:st)?\s*March", q, re.I):
+        years = sorted({y - 1 for y in years})
     if len(years) == 1:
         if entity == "account":
             fy = [r["year"] for r in gr.entities["account"]
@@ -625,7 +776,21 @@ def plan(db, gr, question, answer_type=None, client=None, category=None, estate=
             filters.append(("year", "eq", int(m.group(1))))
 
     # Categorical values quoted in the question, for every column that has any.
-    filters += _match_values(gr, entity, q, {f[0] for f in filters})
+    # Read off the store, so a bank, an asset make or a work category nobody
+    # wrote down still filters -- and in either of the two renderings the
+    # corpus uses for its own category names.
+    taken = {f[0] for f in filters}
+    if sch is not None:
+        for col, val in sch.value_hits(entity, q):
+            if col in taken or col == "doc":
+                continue
+            at_pos = q.lower().find(str(val).lower())
+            before = q[max(0, at_pos - 30):at_pos] if at_pos > 0 else ""
+            neg = re.search(r"\b(?:other than|apart from|besides|excluding|except"
+                            r"|not|rather than|aside from)\b[\s\w]{0,14}$", before, re.I)
+            filters.append((col, "ne" if neg else "eq", val))
+            taken.add(col)
+    filters += _match_values(gr, entity, q, taken)
 
     # A bar the document STATES, repeated identically on every copy -- the
     # minimum staff count, the 5% guarantee, the INR 100 stamp paper. Forty
@@ -677,6 +842,21 @@ def plan(db, gr, question, answer_type=None, client=None, category=None, estate=
                     "filters": base + [("account", "eq", named[0][1])],
                     "denominator": base + [("account", "eq", named[1][1])]}
 
+    # A named work, which identifies exactly one row.
+    if entity == "work":
+        w = _named_work(gr, q)
+        if w:
+            filters.append(("work", "eq", w))
+        lead = _named_person(gr, q)
+        if lead and re.search(r"\bled\b|\bhas led\b|\bran\b|\bmanaged\b|\bheaded\b"
+                              r"|as project manager|\bdelivered\b|\bsigned off\b"
+                              r"|\bunder\b [A-Z]", q, re.I):
+            filters.append(("lead", "eq", lead))
+        if not any(f[0] == "category" for f in filters):
+            c = _named_category(gr, q)
+            if c:
+                filters.append(("category", "eq", c))
+
     if fn == "distinct":
         if re.search(r"client|authorit|department", q, re.I):
             entity, field = "work", "client"
@@ -687,4 +867,6 @@ def plan(db, gr, question, answer_type=None, client=None, category=None, estate=
         else:
             field = "client"
 
+    if entity == "work" and not filters and not (estate or re.search(_ESTATE, q, re.I)):
+        return None            # "every work we have ever done" is not an answer
     return {"entity": entity, "filters": filters, "fn": fn, "field": field}
