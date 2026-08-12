@@ -104,7 +104,8 @@ _ENTITY = [
     ("cv", r"curriculum vitae|\bCV\b|date of joining|joined the company"
            r"|total experience|years of (?:total )?experience|highest qualification"
            r"|been with (?:the company|us)|tenure"),
-    ("reference_letter", r"reference letter (?:on file|states|records)"
+    ("reference_letter", r"reference letters?[^.?]{0,24}"
+                         r"(?:on file|states?|records?|we hold|do we hold|carry)"
                          r"|according to the (?:client )?reference letter"
                          r"|(?:value|amount) (?:stated|recorded) (?:in|on|by) the"
                          r"[^.?]{0,20}(?:reference|letter)"),
@@ -838,7 +839,8 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
         m = re.search(r"\b(BND-\d+)\b", q, re.I)
         if m:
             filters.append(("bond_no", "eq", m.group(1).upper()))
-        if re.search(r"expir\w*|lapse|run out|valid until|end", q, re.I) and years:
+        if re.search(r"expir\w*|lapse|runs? out|valid until|\bends?\b"
+                     r"|in force (?:un)?til", q, re.I) and years:
             filters = [f for f in filters if f[0] != "year"]
             filters.append(("expiry_year", "eq", years[0]))
 
@@ -1053,8 +1055,7 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
     # superlative over a date picks a row; the question then asks for some
     # other column of that row. Which date column is whichever this table has.
     _sup = re.search(r"most recent(?:ly)?|latest|newest|last (?:to|one)"
-                     r"|earliest|oldest|first (?:to|completed|one)|initial",
-                     q, re.I)
+                     r"|earliest|oldest|\bfirst\b|initial", q, re.I)
     if _sup:
         dated = next((c for c in ("issue_date", "completed", "date", "joined",
                                   "letter_date", "initial_date")

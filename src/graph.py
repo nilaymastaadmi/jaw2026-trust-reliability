@@ -288,9 +288,22 @@ class Graph:
 
         # The annual reports' four tables, each a table in its own right: the
         # head of the report only summarises them.
-        self.entities["segment"] = [
-            {**sgm, "year": a.get("year")}
-            for a in e.get("annual_tables", []) for sgm in a.get("segments", [])]
+        # Each report states two years of every segment -- the current column
+        # and the previous-year comparative -- and the two reports overlap. Held
+        # as one row per segment per FINANCIAL YEAR, a question naming a year
+        # selects one cell instead of summing every copy of it.
+        seg = {}
+        for a in sorted(e.get("annual_tables", []), key=lambda x: x.get("year") or 0):
+            y = a.get("year")
+            for sgm in a.get("segments", []):
+                if y is not None:
+                    seg[(sgm["segment"], y)] = {"segment": sgm["segment"], "year": y,
+                                                "current": sgm.get("current"),
+                                                "previous": sgm.get("previous")}
+                    seg.setdefault((sgm["segment"], y - 1),
+                                   {"segment": sgm["segment"], "year": y - 1,
+                                    "current": sgm.get("previous"), "previous": None})
+        self.entities["segment"] = list(seg.values())
         self.entities["seven_year"] = [
             dict(r) for a in e.get("annual_tables", [])[-1:] for r in a.get("seven_year", [])]
         self.entities["ageing"] = [
@@ -299,10 +312,14 @@ class Graph:
         self.entities["principal_client"] = [
             {**r, "year": a.get("year")}
             for a in e.get("annual_tables", [])[-1:] for r in a.get("principal_clients", [])]
+        # The two annual reports carry a byte-identical order-book note, so
+        # holding both answers "how many contracts remained in execution" with
+        # 34 rather than 17. The latest report is the one a question means.
         self.entities["order_book"] = [
             {k: v for k, v in a.items()
              if k not in ("segments", "seven_year", "ageing", "principal_clients")}
-            for a in e.get("annual_tables", [])]
+            for a in sorted(e.get("annual_tables", []),
+                            key=lambda x: x.get("year") or 0)[-1:]]
 
         self.entities["ar_line"] = [
             {"year": a.get("year"), "account": k, "current": v.get("current"),

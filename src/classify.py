@@ -1288,6 +1288,13 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
             else:
                 plan["shape"] = "estate-count"
             return plan
+        if plan["shape"] == "distinct_count" and mine_threshold(q) is not None:
+            # "Of the works she has led, how many are worth more than INR 20 Cr"
+            # counts WORKS above a bar, not the distinct categories they fall
+            # into -- and distinct_count answers confidently either way.
+            plan["shape"] = None
+            plan["doc_entity"] = True
+            return plan
         if plan["shape"] == "distinct_count" and not person:
             plan["confidence"] = 0.0
         if plan["shape"] == "absence" and not client:
