@@ -591,8 +591,18 @@ def ledgers():
             if last and last["balance"] is not None:
                 signed = (-last["balance"] if last.get("side") == "Cr"
                           else last["balance"])
+            # "BANK (ASSET)" is a NAME and a classification, and the ledger
+            # prints them as one string. Held together, a question naming "the
+            # ledger's Bank account" matched nothing, because the store's value
+            # carried a word the question had no reason to say.
+            full = " ".join(m.group(2).split())
+            kind = re.search(r"\((ASSET|LIABILITY|INCOME|EXPENSE|EQUITY|REVENUE)\)\s*$",
+                             full, re.I)
             accounts.append({"code": int(m.group(1)),
-                             "account": " ".join(m.group(2).split()),
+                             "account": (full[:kind.start()].strip()
+                                         if kind else full),
+                             "account_type": (kind.group(1).title()
+                                              if kind else None),
                              "rows": rows,
                              "closing": last["balance"] if last else None,
                              "side": last.get("side") if last else None,

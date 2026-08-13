@@ -86,6 +86,15 @@ _ENTITY = [
                  r"|measured (?:total|quantit)"),
     ("final_bill", r"final bill|awarded value|contract\s*#?\s*\d{2}\b"
                    r"|executed value|approved variations|revised value"),
+    # A BOOK named outright beats any line-item vocabulary. "In the FY 2019
+    # general ledger, what is the closing balance of account 4003 (Contract
+    # Revenue - Water Treatment)" names the ledger, the account and its number,
+    # and was answered from the financial statement because "contract revenue"
+    # appears in both and the statement was tested first. Same for the trial
+    # balance, which lost to the bank statement on the words "closing balance".
+    ("ledger_account", r"\baccount\s*\d{3,4}\b|in the (?:FY\s*\d{4}\s*)?ledger"
+                       r"|ledger account|general ledger|chart of accounts"),
+    ("account", r"trial balance|\bTB\b account|per the trial balance"),
     ("fin_line", r"profit (?:before|after) tax|\bPBT\b|\bPAT\b|profit and loss"
                  r"|profit & loss|financial statement|contract revenue"
                  r"|cost of materials|sub-?contracting|employee benefit"
@@ -97,14 +106,11 @@ _ENTITY = [
     # A whole year of a bank statement, as against its individual lines. The
     # closing balance is the year's last balance, not a sum of balances, and
     # "deposits in 2021" is the year's total -- both are held per year already.
-    ("ledger_account", r"\baccount\s*\d{3,4}\b|in the (?:FY\s*\d{4}\s*)?ledger"
-                       r"|ledger account|general ledger"),
     ("bank_year", r"closing\s+(?:\w+\s+)?balance|balance at (?:the )?(?:year|end)"
                   r"|(?:total |all )?(?:deposits?|withdrawals?)\s*(?:in|during|for|across)"
                   r"|total (?:deposits?|withdrawals?)|year-end balance"),
     ("bank_txn", r"bank statement|withdrawal|deposit|running balance"
                  r"|current account|statement of account|single transaction"),
-    ("account", r"trial balance|\bTB\b account|per the trial balance"),
     ("ledger_account", r"general ledger|ledger account|\bledger\b|posted line"
                        r"|chart of accounts|voucher"),
     ("order_book", r"order book|contracts? (?:remained |still )?in execution"
@@ -604,7 +610,12 @@ def _first(pairs, text):
 # No named shape reaches any of these -- all 23 are scoped to a client and read
 # from the works or the receivables. Here the graph is not competing with a
 # tested path, it is the only path.
-_NO_SHAPE = {"asset", "boq_item", "bond", "compliance", "iso_cert", "audit",
+# `account` is the trial balance. It was left out of this set, so a question
+# that resolved to it was refused before any plan was built -- the graph is
+# only consulted where no shape ran, and no shape reads the trial balance at
+# all, so those questions had no path to an answer.
+_NO_SHAPE = {"account",
+             "asset", "boq_item", "bond", "compliance", "iso_cert", "audit",
              "dossier", "business_unit", "fin_line", "ra_bill", "final_bill",
              "boq_line", "bank_txn", "bank_year", "ledger_account",
              "ledger_line", "director", "ar_line",
@@ -954,7 +965,11 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
         elif thr and re.search(r"below|under|less than|smaller than|beneath", q, re.I):
             filters.append(("value", "lte", thr))
 
-    if entity == "account":
+    if entity == "account" and "account" not in selecting:
+        # Same rule as the plant register: a one-word approximation of a column
+        # stands down where the schema matched a value of it outright. "The
+        # 'Contract Revenue - Tunnels' account" names one of 28 accounts, and
+        # `contains "Revenue"` reduced it to all twelve revenue lines.
         m = re.search(r"\b(revenue|payable|receivable|depreciation|bank|cash|capital"
                       r"|materials?|labour|salaries|tax)\b", q, re.I)
         if m:
