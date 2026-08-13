@@ -144,6 +144,14 @@ def main():
               for c in est["compliance"]))
     check("every matrix quotes a turnover bar",
           all(c["turnover_req"] for c in est["compliance"]))
+    check("every dossier lists 8 annexures, 10 registrations, 5 true copies",
+          all(d["annexures"] == 8 and d["registrations"] == 10
+              and d["cert_copies"] == 5 for d in est["dossiers"]),
+          str([(d["annexures"], d["registrations"], d["cert_copies"])
+               for d in est["dossiers"]]))
+    check("every dossier states the bid security it lodged",
+          all(d["bid_security"] and d["bid_security_bank"]
+              for d in est["dossiers"]))
     check("every dossier has 6 business units",
           all(len(d["units"]) == 6 for d in est["dossiers"]),
           str([len(d["units"]) for d in est["dossiers"]]))

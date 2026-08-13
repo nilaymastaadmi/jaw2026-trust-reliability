@@ -293,6 +293,17 @@ def iso_certs():
 _UNIT = re.compile(r"^([A-Z][\w &.\-]+?)\n(enterprise|mega|sme|small|medium)\n(\d{1,4})$", re.M)
 
 
+class _EmptyMatch:
+    """Stands in for a regex that did not match, so a count can be zero."""
+
+    @staticmethod
+    def group(_):
+        return ""
+
+
+_EMPTY = _EmptyMatch()
+
+
 def dossiers():
     out = []
     for doc in _docs("DOC-DOSSIER-"):
@@ -309,14 +320,42 @@ def dossiers():
         # letters and would otherwise be swept into the capture.
         work = re.search(r"[Dd]o[Ss][Ss]ier\s+([A-Za-z][A-Za-z &]{2,30}?)\s*Works?"
                          r"\s*[\u2014-]\s*Tender RFP-\d+", _flat(t))
+        # Annexure H states the instrument actually lodged. The covering
+        # letter's "Earnest money of INR 0 has been furnished" is a separate
+        # figure and it is zero on all six, so a question about the bid
+        # security read off the letter got nothing.
+        sec = re.search(r"Annexure H\s*[\u2014-][^\n]*\n"
+                        r"Instrument\s*\nIssuer\s*\nAmount\s*\nValid To\s*\n"
+                        r"(.+?)\n(.+?)\n(" + _AMOUNT + r")\s*\n(.+?)$",
+                        t, re.I | re.M)
+        # Annexure B: the registrations table, then one block per certificate
+        # whose true copy is annexed.
+        annexb = re.search(r"Annexure b\s*[\u2014-][^\n]*\n(.*?)(?=CerTifiCATe Copy)",
+                           t, re.S | re.I)
+        regs = (len(re.findall(r"^\w[^\n]*\n[^\n]*\n(?:active|inactive|expired)\s*$",
+                               annexb.group(1), re.M | re.I)) if annexb else None)
         out.append({
             "doc": doc,
             "work": work.group(1).strip() if work else None,
             "rfp_ref": rfp.group(1) if rfp else None,
+            # The same column the bonds and the compliance matrices call
+            # tender_ref. One name for one fact, so a filter written against
+            # either table reaches this one too.
+            "tender_ref": rfp.group(1) if rfp else None,
             "bid_value": _money(bid.group(1)) if bid else None,
             "submitted": sub.group(1).strip() if sub else None,
             "emd": _money(emd.group(1)) if emd else None,
+            "bid_security": _money(sec.group(3)) if sec else None,
+            "bid_security_bank": sec.group(2).strip() if sec else None,
+            "bid_security_valid_to": sec.group(4).strip() if sec else None,
             "relevant_works": int(rel.group(1)) if rel else None,
+            "registrations": regs,
+            "cert_copies": len(re.findall(r"CerTifiCATe Copy", t, re.I)) or None,
+            # The front page lists them as a two-column table, so the letters
+            # arrive one per line under an "Annexure / Contents" header.
+            "annexures": len(re.findall(r"^[A-H]$", (
+                re.search(r"^Annexure\s*\nContents\s*\n(.*?)\n(?:DOC-|Page )",
+                          t, re.S | re.M) or _EMPTY).group(1), re.M)) or None,
             "client": client.group(1).strip() if client else None,
             "units": units,
             "headcount": sum(u["headcount"] for u in units) or None,

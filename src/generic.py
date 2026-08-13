@@ -258,7 +258,17 @@ _FIELD_CUES = {
     "iso_cert": [(r"major", "major_ncs"), (r"minor", "minor_ncs"),
                  (r"\bdays?\b|validity|valid for|span|how long", "validity_days")],
     "audit": [(r"major", "major"), (r"minor", "minor")],
-    "dossier": [(r"\bemd\b|earnest", "emd"),
+    # Bid SECURITY before bid value: the instrument lodged in Annexure H and
+    # the offer on the covering letter are different numbers, and the catch-all
+    # below matches the word "bid" in either.
+    "dossier": [(r"bid security|security (?:amount|lodged|instrument)"
+                 r"|instrument lodged", "bid_security"),
+                (r"true cop(?:y|ies)|certificate cop(?:y|ies)"
+                 r"|annexure b\b|registration/certification", "cert_copies"),
+                (r"registrations? (?:table|listed|held)|how many registrations",
+                 "registrations"),
+                (r"how many annexures?|annexures? (?:are|does|form)", "annexures"),
+                (r"\bemd\b|earnest", "emd"),
                 (r"head-?count|personnel|staff", "headcount"),
                 (r"relevant works|past performance", "relevant_works"),
                 (r"bid|value|worth|total", "bid_value")],
@@ -700,7 +710,8 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
                   "defect_liability_days", "works_led", "credentials",
                   "categories_led", "clients_served", "audits_done",
                   "director_count", "contracts_in_execution", "credit_notes",
-                  "variation_orders"}
+                  "variation_orders", "cert_copies", "registrations",
+                  "annexures", "requirements", "complied", "not_complied"}
     # "HIGHEST qualification" is the name of a column, not an instruction to
     # take a maximum. A superlative directly in front of a word the filtered
     # column is called is part of that column's name.
