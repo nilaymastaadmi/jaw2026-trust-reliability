@@ -1,0 +1,7 @@
+# run.sh and setup.sh are executed by bash on the grader's Linux machine.
+# Committed from Windows, git would otherwise store CRLF, and a shell script
+# with carriage returns dies on the shebang line with a "\r: command not found"
+# that looks nothing like its cause. Force LF for anything bash will read.
+*.sh text eol=lf
+*.py text eol=lf
+requirements.txt text eol=lf

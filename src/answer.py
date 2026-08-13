@@ -16,7 +16,82 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import corpus
 import executor
+import llm
 import router
+
+
+# --------------------------------------------------------- LLM last resort
+#
+# Applied ONLY where the deterministic ladder has already given up and would
+# emit `fallback:typical` -- a corpus-median guess.  Under this round's exact-
+# match scoring that guess is worth exactly 0, and a wrong LLM answer is also
+# worth exactly 0, so this can only add points and can never cost any.  It never
+# touches a question the executor answered: a computed number always wins.
+#
+# This is the one place the model is allowed near a number, and it reads
+# structured rows out of db.json rather than raw PDF text, so it is arithmetic
+# over a verified extraction rather than extraction and arithmetic at once.
+
+_ANSWER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "answer": {"type": "number"},
+        "basis": {"type": "string"},
+    },
+    "required": ["answer", "basis"],
+    "additionalProperties": False,
+}
+
+
+def _context(db, plan, limit=60):
+    """Compact, factual rows for the entity the router did manage to resolve."""
+    client = plan.get("client")
+    if not client and plan.get("work"):
+        w = db.work(plan["work"])
+        client = w["client"] if w else None
+    if not client and plan.get("person"):
+        led = db.led_by(plan["person"])
+        client = led[0]["client"] if led else None
+
+    if client:
+        works = db.portfolio(client)[:limit]
+        rows = [{k: w.get(k) for k in
+                 ("work", "value", "completed", "category", "role", "has_ref", "grading")}
+                for w in works]
+        ctx = {"client": client, "works": rows}
+        ar = db.receivables.get(client)
+        if ar:
+            ctx["receivables"] = ar
+        return ctx
+    # Nothing resolved: give the client roster so it can at least pick one.
+    return {"clients": sorted({w["client"] for w in db.works if w.get("client")})}
+
+
+def llm_last_resort(db, plan, q):
+    """A number from the endpoint, or None.  Never raises."""
+    if not llm.available():
+        return None
+    t = (q.get("answer_type") or "money").lower()
+    unit = {"money": "an integer number of RUPEES (1 crore = 10000000, 1 lakh = 100000)",
+            "count": "an integer count",
+            "percent": "a percentage out of 100",
+            "days": "an integer number of days"}.get(t, "a plain number")
+    got = llm.chat_json(
+        [{"role": "system", "content":
+            "You answer questions about an infrastructure contractor from the JSON "
+            "records given. Use ONLY those records. Compute carefully and return "
+            "the final number with no units, no separators and no symbols."},
+         {"role": "user", "content":
+            f"Records:\n{json.dumps(_context(db, plan), default=str)[:60000]}\n\n"
+            f"Question: {q['question']}\n\n"
+            f"Answer with {unit}."}],
+        schema=_ANSWER_SCHEMA,
+        max_tokens=4096,
+    )
+    if not got or not isinstance(got.get("answer"), (int, float)):
+        return None
+    val = got["answer"]
+    return round(val, 2) if t == "percent" else round(val)
 
 
 def load_questions(path):
@@ -80,9 +155,14 @@ def fallbacks(db, plan, q, corpus_medians):
         if got is not None:
             return got, f"fallback:{shape}"
 
-    # Nothing ran. Emit a corpus-typical value of the right unit rather than 0:
-    # under proportional scoring a median guess earns partial credit, a 0 earns
-    # none, and a blank is scored as 0 anyway.
+    # Nothing deterministic ran. Last resort, in order:
+    #   1. the provided endpoint, reading db.json rows for this entity
+    #   2. a corpus-typical value of the right unit
+    # Under exact match (1) can only gain and (2) is worth 0 -- but (2) still
+    # costs nothing, and a filled row is required, so keep both.
+    got = llm_last_resort(db, plan, q)
+    if got is not None:
+        return got, "llm:last_resort"
     return corpus_medians.get(t, corpus_medians["money"]), "fallback:typical"
 
 
@@ -102,14 +182,21 @@ def answer_all(questions, use_llm=False, verbose=True):
         "percent": 50.0,
     }
 
+    # Escalate only what the deterministic router is unsure about. The endpoint
+    # is shared across finalists, so sending it 300 questions it cannot improve
+    # wastes their capacity and our wall clock alike.
     llm_plans = {}
-    if use_llm and router.llm_available():
+    if use_llm and llm.health():
+        unsure = [q for q in questions
+                  if router.route(db, q["question"], q.get("answer_type"))["confidence"] < 1.0]
+        if verbose:
+            print(f"[router] escalating {len(unsure)}/{len(questions)} low-confidence questions")
         try:
-            llm_plans = router.route_llm(questions)
+            llm_plans = router.route_llm(unsure, verbose=verbose)
             if verbose:
-                print(f"[router] LLM classified {len(llm_plans)} questions")
-        except Exception as e:
-            print(f"[router] LLM backend failed ({e}); deterministic only")
+                print(f"[router] llm returned {len(llm_plans)} usable plans")
+        except Exception as e:                  # must never end the run
+            print(f"[router] llm backend failed ({e}); deterministic only")
 
     rows = []
     for q in questions:
@@ -177,6 +264,7 @@ def score(rows):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--docs", help="document estate root (walked recursively)")
     ap.add_argument("--questions", default=str(corpus.DATA / "sample_questions.json"))
     ap.add_argument("--out", default=str(corpus.WORK / "submission.csv"))
     ap.add_argument("--llm", action="store_true", help="escalate low-confidence to the LLM router")
@@ -184,8 +272,11 @@ def main():
     ap.add_argument("--force", action="store_true",
                     help="allow overwriting a larger existing submission")
     a = ap.parse_args()
+    if a.docs:
+        corpus.set_docs_root(a.docs)
 
     questions = load_questions(a.questions)
+    print(f"[answer] {len(questions)} questions")
     rows = answer_all(questions, use_llm=a.llm)
     corpus.WORK.mkdir(parents=True, exist_ok=True)
 
@@ -238,6 +329,10 @@ def main():
             print(f"{shape:24s} {s:7.1f} {k:3d}   {s/max(k,1):.0%}")
         print(f"\nTOTAL {total:.1f} / {n} = {total/max(n,1):.1%}")
     print(f"\nwrote {a.out}")
+    if a.llm:
+        print(f"[llm] {llm.stats()}")
+        used = sum(1 for r in rows if r["source"] == "llm:last_resort")
+        print(f"[llm] answered {used} questions the deterministic ladder could not")
     unsure = [r for r in rows if r["confidence"] < 1.0 or r["source"] != "router"]
     if unsure:
         print(f"low-confidence / fallback: {len(unsure)}")

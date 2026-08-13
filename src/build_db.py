@@ -9,6 +9,7 @@ Field precedence follows source reliability established during recon:
 Nothing here approximates.  A field that cannot be read stays None so the
 invariant check can see it, rather than being quietly defaulted.
 """
+import argparse
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -36,7 +37,9 @@ def build(verbose=True):
     refs = [parse_reference(d, t) for d, t in corpus.by_type("reference_letter")]
     people = [parse_personnel(d, t) for d, t in corpus.by_type("personnel_certificate")]
     cvs = [parse_cv(d, t) for d, t in corpus.by_type("cv")]
-    ppp = parse_portfolio(corpus.text("DOC-PPP-001"))
+    # By type, never by hardcoded doc_id: the estate we are run against is a
+    # different instance of the same templates, so ids are not guaranteed.
+    ppp = parse_portfolio(corpus.one_of_type("past_performance_portfolio"))
 
     # ---- works keyed on the normalised work name -------------------------
     works = {}
@@ -135,4 +138,10 @@ def report(db):
 
 
 if __name__ == "__main__":
-    build()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--docs", help="document estate root (walked recursively)")
+    ap.add_argument("--quiet", action="store_true")
+    args = ap.parse_args()
+    if args.docs:
+        print(f"[db] docs root: {corpus.set_docs_root(args.docs)}")
+    build(verbose=not args.quiet)

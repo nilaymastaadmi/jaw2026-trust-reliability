@@ -1,0 +1,8 @@
+# Pinned so `pip install -r requirements.txt` is reproducible and nothing
+# resolves differently on the grader's machine than it does here.
+#
+# Deliberately small. The LLM client is stdlib urllib against the provided
+# endpoint -- no `openai` package, no HTTP library, nothing that could try to
+# reach a package index or a model host once the run has started.
+PyMuPDF==1.24.10
+openpyxl==3.1.5

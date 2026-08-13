@@ -5,9 +5,10 @@ Two backends:
   deterministic  always available, instant, free.  Lexical signals per shape
                  plus the parameter miners.  Validated 25/25 on the samples.
   llm            escalation for questions the deterministic router is unsure
-                 about.  Used only when a credential exists -- the `claude`
-                 CLI is session-limited and would consume the operator's own
-                 quota mid-competition, so it is never the primary path.
+                 about, served by the provided endpoint (see llm.py).  It is
+                 never the primary path: it runs only where the deterministic
+                 router reports confidence < 1.0, so a slow or dead endpoint
+                 costs nothing that was already answerable.
 
 The router NEVER computes an answer.  It picks a shape and extracts parameters;
 executor.py does every sum, count, difference and date span.
@@ -16,6 +17,7 @@ import json
 import os
 import re
 
+import llm
 from normalize import threshold_from_text, GRADES
 
 SHAPES = ["absence", "referenced_share", "rank_value", "threshold_aggregate",
@@ -438,46 +440,61 @@ ROUTER_SCHEMA = {
         "grading": {"type": ["string", "null"]},
         "role": {"type": ["string", "null"]},
     },
-    "required": ["shape"],
+    # Every property is required (with null permitted) because strict structured
+    # output constrains decoding against exactly this schema -- a partially
+    # required schema lets the model omit fields we then read as missing.
+    "required": ["shape", "client", "person", "work", "threshold",
+                 "category", "grading", "role"],
     "additionalProperties": False,
 }
 
+_BATCH = 20          # questions per request; small enough to stay well inside
+                     # context and to lose little when one batch fails
+
 
 def llm_available():
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        return False
-    try:
-        import anthropic  # noqa: F401
-        return True
-    except ImportError:
-        return False
+    """True only when the provided endpoint is configured and still healthy."""
+    return llm.available()
 
 
-def route_llm(questions, model="claude-opus-5"):
-    """Batch-classify [{qid, question}] -> {qid: plan}.  Requires a credential.
+def route_llm(questions, verbose=True):
+    """Batch-classify [{qid, question}] -> {qid: plan} using the provided endpoint.
 
-    Batched so one request covers many questions; the executor still does all
-    arithmetic, so a router slip costs one question rather than a wrong number
-    everywhere.
+    The model classifies and extracts parameters.  It NEVER computes a number --
+    executor.py does every sum, count, difference and date span.  So a routing
+    slip costs one question rather than putting a wrong number everywhere, and
+    the arithmetic stays exactly as auditable as it was before.
+
+    Batched because the endpoint is shared across finalists: one request per
+    twenty questions rather than hundreds of parallel connections.  A failed
+    batch returns nothing for those questions and the deterministic plan stands.
     """
-    import anthropic
-
-    client = anthropic.Anthropic()
-    numbered = "\n".join(f"{i+1}. {q['question']}" for i, q in enumerate(questions))
-    resp = client.messages.create(
-        model=model,
-        max_tokens=16000,
-        system=ROUTER_SYSTEM,
-        output_config={"format": {"type": "json_schema", "schema": {
-            "type": "object",
-            "properties": {"plans": {"type": "array", "items": ROUTER_SCHEMA}},
-            "required": ["plans"],
-            "additionalProperties": False,
-        }}},
-        messages=[{"role": "user",
-                   "content": f"Classify each question. Return one plan per question, "
-                              f"in order.\n\n{numbered}"}],
-    )
-    text = next(b.text for b in resp.content if b.type == "text")
-    plans = json.loads(text)["plans"]
-    return {q["qid"]: p for q, p in zip(questions, plans)}
+    schema = {
+        "type": "object",
+        "properties": {"plans": {"type": "array", "items": ROUTER_SCHEMA}},
+        "required": ["plans"],
+        "additionalProperties": False,
+    }
+    out = {}
+    for start in range(0, len(questions), _BATCH):
+        batch = questions[start:start + _BATCH]
+        numbered = "\n".join(f"{i+1}. {q['question']}" for i, q in enumerate(batch))
+        got = llm.chat_json(
+            [{"role": "system", "content": ROUTER_SYSTEM},
+             {"role": "user", "content":
+                 f"Classify each question. Return exactly {len(batch)} plans, "
+                 f"one per question, in the same order.\n\n{numbered}"}],
+            schema=schema,
+            max_tokens=4096,
+        )
+        plans = (got or {}).get("plans") or []
+        for q, p in zip(batch, plans):               # zip stops at the shorter
+            if isinstance(p, dict) and p.get("shape") in SHAPES:
+                out[q["qid"]] = p
+        if verbose:
+            print(f"[router] llm batch {start // _BATCH + 1}: "
+                  f"{len(plans)}/{len(batch)} plans")
+        if not llm.available():                      # breaker tripped mid-run
+            print("[router] llm disabled; keeping deterministic plans for the rest")
+            break
+    return out

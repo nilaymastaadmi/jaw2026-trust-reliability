@@ -26,6 +26,7 @@ Entity linkage, verified:
     BOQ totals run roughly 2x the certificate value -- they measure gross
     measured quantities, NOT contract value. Do not conflate the two.
 """
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -37,7 +38,29 @@ import openpyxl
 import corpus
 from normalize import norm_client, parse_date, iso
 
-WB = corpus.DATA / "documents" / "workbooks"
+def _xlsx():
+    """Every spreadsheet in the estate, keyed by normalised filename stem.
+
+    Resolved from the recursive walk rather than a fixed `workbooks/` folder --
+    the grader's tree is nested differently and the folder may not exist.
+    """
+    out = {}
+    for row in corpus.index():
+        p = row["path"]
+        if str(p).lower().endswith((".xlsx", ".xlsm")):
+            out[re.sub(r"[^a-z0-9]+", "_", p.stem.lower()).strip("_")] = p
+    return out
+
+
+def _wb(stem):
+    """One workbook by stem, or None if this estate does not carry it."""
+    return _xlsx().get(stem)
+
+
+def _wb_glob(prefix):
+    """Every workbook whose stem starts with prefix, in stem order."""
+    x = _xlsx()
+    return [x[k] for k in sorted(x) if k.startswith(prefix)]
 
 
 def _sheet_rows(ws):
@@ -62,7 +85,7 @@ def _canon(name, canonical):
 
 
 def receivables(canonical):
-    ws = openpyxl.load_workbook(WB / "Receivables_Ageing.xlsx", data_only=True)["AR Ageing"]
+    ws = openpyxl.load_workbook(_wb("receivables_ageing"), data_only=True)["AR Ageing"]
     rows = _sheet_rows(ws)
     per = defaultdict(lambda: {"invoiced": 0, "received": 0, "outstanding": 0, "invoices": 0})
     out = []
@@ -88,7 +111,7 @@ def receivables(canonical):
 
 
 def trial_balance():
-    wb = openpyxl.load_workbook(WB / "Trial_Balance_by_Year.xlsx", data_only=True)
+    wb = openpyxl.load_workbook(_wb("trial_balance_by_year"), data_only=True)
     out = {}
     for ws in wb.worksheets:
         if ws.title.lower().startswith("note"):
@@ -104,7 +127,7 @@ def trial_balance():
 
 
 def assets():
-    ws = openpyxl.load_workbook(WB / "Plant_and_Machinery_Register.xlsx",
+    ws = openpyxl.load_workbook(_wb("plant_and_machinery_register"),
                                 data_only=True)["Plant Register"]
     return [
         {"asset_id": r.get("Asset ID"), "type": r.get("Type"), "make": r.get("Make"),
@@ -117,7 +140,7 @@ def assets():
 
 def boq():
     out = {}
-    for path in sorted(WB.glob("BOQ_and_Measurements_Contract_*.xlsx")):
+    for path in _wb_glob("boq_and_measurements_contract"):
         n = int(path.stem.rsplit("_", 1)[-1])
         wb = openpyxl.load_workbook(path, data_only=True)
         items = [
