@@ -166,6 +166,12 @@ def main():
             ("cvs", 39, "experience_years", 39),
             ("credentials", 48, "validity_days", 48),
             ("reference_letters", 132, "work", 132),
+            # Three templates, four money renderings between them. Two of the
+            # three patterns omitted the bare Indian-grouped form and lost the
+            # value on 19 letters, which is the fact most of the questions
+            # about them ask for.
+            ("reference_letters", 132, "value", 132),
+            ("reference_letters", 132, "client", 132),
             ("bonds", 60, "amount", 60),
             ("compliance", 40, "turnover_req", 40),
             ("dossiers", 6, "bid_value", 6)]:

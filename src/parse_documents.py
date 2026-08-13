@@ -621,6 +621,30 @@ def cvs():
 
 # ------------------------------------------------------------ reference letters
 
+# The four ways this corpus writes money, in one place. Three of the reference
+# letter templates state the value differently, and each pattern used to carry
+# its own idea of what a rupee amount looks like: the two that omitted the bare
+# Indian-grouped form -- "INR 12,94,00,000/-" -- lost the value on 19 letters.
+_AMOUNT = (r"(?:INR|Rs\.?|\u20b9)\s*[\d.,]+\s*(?:Cr|Crores?|Lakhs?|Lacs?)"
+           r"|(?:INR|Rs\.?|\u20b9)\s*[\d,]{7,}")
+
+# The client's name heads the letter, and on three of the 132 it wraps onto a
+# second line -- "Irrigation & Waterways Dept, Govt of West" / "Bengal". Reading
+# only the first line truncated the name, and a truncated name matches nothing.
+_REF_HEAD_END = re.compile(r"\u00b7|^\s*(?:Letter of Recommendation|LETTER OF"
+                           r"|Ref:|Our ref:|Date:|To whomsoever)", re.I)
+
+
+def _ref_client(text):
+    parts = []
+    for line in text.strip().split("\n")[:3]:
+        line = line.strip()
+        if not line or _REF_HEAD_END.search(line):
+            break
+        parts.append(line)
+    return " ".join(parts) or None
+
+
 def reference_letters():
     """The 132 client reference letters.
 
@@ -634,7 +658,7 @@ def reference_letters():
         f = _flat(_text(doc))
         ref = re.search(r"Our ref:\s*(\S+)", f)
         work = re.search("work\\s*[\u201c\"']([^\u201d\"']+)[\u201d\"']", f)
-        val = re.search(r"\(((?:INR|Rs\.?)\s*[\d.,]+\s*(?:Cr|Crore|Lakh)s?)\)", f, re.I)
+        val = re.search(r"\((" + _AMOUNT + r")\s*(?:/-)?\s*\)", f, re.I)
         comp = re.search(r"completed on ([\d]{1,2} \w{3} \d{4}|\d{4}-\d{2}-\d{2})", f, re.I)
         valid = re.search(r"valid for a period of\s+(\w+)", f, re.I)
         # Second template ("To whomsoever it may concern"): the work, value and
@@ -642,7 +666,7 @@ def reference_letters():
         if work is None:
             work = re.search(r"Work Executed\s+(.+?)\s+Value\s", f)
         if val is None:
-            val = re.search(r"\sValue\s+((?:INR|Rs\.?)\s*[\d.,]+\s*(?:Cr|Crore|Lakh)s?)", f, re.I)
+            val = re.search(r"\sValue\s+(" + _AMOUNT + r")", f, re.I)
         if comp is None:
             comp = re.search(r"\sCompleted\s+(\d{2}/\d{2}/\d{4}|\d{4}-\d{2}-\d{2})", f)
         # Third template ("1. Project Details"), a labelled block that also
@@ -654,15 +678,13 @@ def reference_letters():
             # Indian digit grouping with no unit word -- "INR 11,32,00,000/-" --
             # is the fourth way this corpus writes money, and the only one the
             # unit-suffixed pattern cannot see.
-            val = re.search(r"Contract Value\s+((?:INR|Rs\.?)\s*[\d.,]+"
-                            r"\s*(?:Cr|Crore|Lakh)s?|(?:INR|Rs\.?)\s*[\d,]{7,}(?=/|\s|$))",
-                            f, re.I)
+            val = re.search(r"Contract Value\s+(" + _AMOUNT + r")", f, re.I)
         if comp is None:
             comp = re.search(r"Date of Completion\s+(\d{4}-\d{2}-\d{2}"
                              r"|\d{2}/\d{2}/\d{4})", f)
         nature = re.search(r"Nature of Work\s+(.+?)\s+Contract Value", f)
         role = re.search(r"Contractor's Role\s+(Prime|JV Partner)", f)
-        client = _text(doc).strip().split("\n")[0].strip()
+        client = _ref_client(_text(doc))
         letter_date = re.search(r"(\d{1,2} \w{3} \d{4})", f)
         d = normalize.parse_date(comp.group(1)) if comp else None
         out.append({

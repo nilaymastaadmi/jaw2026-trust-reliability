@@ -282,7 +282,30 @@ class Graph:
         # not read: a validity span is arithmetic over two dates on one page.
         self.entities["credential"] = [dict(c) for c in e.get("credentials", [])]
 
-        self.entities["reference_letter"] = [dict(r) for r in e.get("reference_letters", [])]
+        # The letterhead spells the client the way the letter's author typed
+        # it, and twelve of the 132 shout it: "MAHANADI STEEL CORPORATION",
+        # "MERIDIAN CONSTRUCTORS & CO.". A question writes the name the way the
+        # rest of the corpus does, so filtering on the shouted spelling found
+        # nothing. Where the letter names a work the estate knows, that work's
+        # client IS this client, and its spelling is the canonical one -- taken
+        # only when the two agree under case and punctuation, so a genuinely
+        # different name is never overwritten.
+        _canon = {}
+        for w in self.entities.get("work", []):
+            if w.get("work") and w.get("client"):
+                _canon[w["work"]] = w["client"]
+
+        def _key(c):
+            return re.sub(r"[^a-z0-9]+", "", str(c or "").lower())
+
+        letters = []
+        for r in e.get("reference_letters", []):
+            r = dict(r)
+            c = _canon.get(r.get("work"))
+            if c and r.get("client") and c != r["client"] and _key(c) == _key(r["client"]):
+                r["client"] = c
+            letters.append(r)
+        self.entities["reference_letter"] = letters
 
         self.entities["dossier_standing"] = [dict(r) for r in e.get("dossier_standing", [])]
 
@@ -338,7 +361,7 @@ class Graph:
         "contains": lambda a, b: b.lower() in str(a).lower(),
     }
 
-    def select(self, entity, filters=None):
+    def _apply(self, entity, filters):
         rows = self.entities.get(entity) or []
         for field, op, value in (filters or []):
             fn = self.OPS.get(op)
@@ -356,6 +379,35 @@ class Graph:
                     continue
             rows = kept
         return rows
+
+    def select(self, entity, filters=None):
+        """Rows matching every filter, with NULL read as "not stated".
+
+        A blank field is not a mismatch, it is an absence. Only 44 of the 132
+        reference letters use the template that states a category at all, so
+        "the Water Treatment Plant project in Madhya Pradesh -- what value does
+        it state" resolved both the work and the category, and the category the
+        letter never records emptied the table.
+
+        Where the full filter set selects nothing, a filter is dropped only if
+        the column it names is unstated on EVERY row the other filters select.
+        That is the case where the filter can carry no information. A column
+        that IS stated there and simply disagrees keeps its filter, so a real
+        zero stays a zero.
+        """
+        rows = self._apply(entity, filters)
+        if rows or not filters or len(filters) < 2:
+            return rows
+        keep, dropped = list(filters), True
+        while dropped and len(keep) > 1:
+            dropped = False
+            for f in list(keep):
+                others = [g for g in keep if g is not f]
+                cand = self._apply(entity, others)
+                if cand and all(r.get(f[0]) is None for r in cand):
+                    keep, dropped = others, True
+                    break
+        return self._apply(entity, keep) if len(keep) < len(filters) else rows
 
     def reduce(self, rows, fn, field=None):
         if fn == "count":
