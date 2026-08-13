@@ -923,6 +923,22 @@ _DOC_ENTITY = (
     r"|trial balance")
 
 
+# OUR OWN NAME. It heads every document in the corpus and questions repeat it
+# -- "in how many of the 155 completed works did National Infrastructure Corp.
+# Ltd. act as a JV Partner". It is the contractor, never a client, and left in
+# it scored against client names on the words it shares with them ("National",
+# "Corp", "Ltd") and resolved one at random.
+_OURSELVES = re.compile(
+    r"\bNational\s+Infrastructure\s+Corp(?:oration)?\.?\s*(?:Ltd\.?|Limited)?"
+    r"|\bM/s\s+National\s+Infrastructure[\w .]*"
+    r"|\bNAICC\d*\w*\b", re.I)
+
+
+def _us(text):
+    """The question with the contractor's own name blanked, offsets preserved."""
+    return _OURSELVES.sub(lambda m: " " * len(m.group(0)), text)
+
+
 def _by_category_only(clidx, catidx, client, text):
     """`client`, unless the only words matching it were category names."""
     if not client:
@@ -1126,7 +1142,7 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     # work in play a free-floating state token is more likely to be the work's
     # than the client's -- and there the refusal is what lets the named work's
     # own client take over two lines below, which is always right.
-    client = clidx.resolve(drop_negated_states(strip_cats(strip_work(q))),
+    client = clidx.resolve(drop_negated_states(strip_cats(strip_work(_us(q)))),
                            tiebreak=tiebreak, state_tiebreak=named_work is None)
     if not client:
         # Retry with the category mentions left in. Some clients carry a
@@ -1139,9 +1155,10 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
         # justified by at least one word that is not category vocabulary.
         client = _by_category_only(
             clidx, catidx,
-            clidx.resolve(drop_negated_states(strip_work(q)), tiebreak=tiebreak,
+            clidx.resolve(drop_negated_states(strip_work(_us(q))),
+                          tiebreak=tiebreak,
                           state_tiebreak=named_work is None),
-            drop_negated_states(strip_work(q)))
+            drop_negated_states(strip_work(_us(q))))
     if not client and named_work and named_work.get("client"):
         # The named work's client, BEFORE any unstripped retry. Questions that
         # name only a work ("the Farhan Khan PMP on Highway Construction —
@@ -1157,9 +1174,9 @@ def plan_for(db, question, answer_type=None, catidx=None, clidx=None):
     if not client:
         client = _by_category_only(
             clidx, catidx,
-            clidx.resolve(drop_negated_states(q), tiebreak=tiebreak,
+            clidx.resolve(drop_negated_states(_us(q)), tiebreak=tiebreak,
                           state_tiebreak=named_work is None),
-            drop_negated_states(q))
+            drop_negated_states(_us(q)))
     if not client and person:
         led = db.led_by(person)
         names = {w["client"] for w in led if w.get("client")}
