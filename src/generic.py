@@ -44,7 +44,10 @@ _ENTITY = [
     ("ar_line", r"financial highlights"),
     ("ar_balance", r"balance[- ]sheet(?![- ]extract)(?![^.?]{0,24}\bextract\b)"
                    r"(?<!statement's balance sheet)"),
-    ("quarter", r"\bquarters?\b|\bquarterly\b|\bQ[1-4]\b"),
+    # SINGULAR only, and the plural is the giveaway: "Residential Quarters -
+    # Uttar Pradesh Pkg-25" is a completed work, not a period, and matching it
+    # sent every reference letter about one to the quarterly revenue table.
+    ("quarter", r"\bquarterly\b|\bQ[1-4]\s*FY|\bquarter\b(?!s)"),
     ("order_line", r"order[- ]book annexure|contracts? in force|awarded plus variations"
                    r"|order book[^.?]{0,30}\bcontracts?\b"),
     ("variation", r"variation orders?[^.?]{0,40}annexure|annexure[^.?]{0,40}variation order"
@@ -63,9 +66,14 @@ _ENTITY = [
                       r"|\bunits?\b[^.?]{0,20}head-?count"),
     ("segment", r"\bsegments?\b|segment revenue|revenue by (?:work )?categor|segmental"
                 r"|by segment|segment(?:al)? (?:analysis|performance|commentary)"),
-    ("ageing", r"receivables ageing|ageing annexure|ageing (?:table|bucket)"
+    # The ageing ANNEXURE is the annual report's, one row per client with three
+    # buckets. The ageing WORKBOOK is the spreadsheet, one row per invoice.
+    # They share a name and answer different questions, so a question naming
+    # the workbook or an invoice belongs to the other table.
+    ("ageing", r"(?!.*\b(?:workbook|invoices?)\b)"
+               r"(?:receivables ageing|ageing annexure|ageing (?:table|bucket)"
                r"|(?:more|greater|older) than 12 months|6\s*(?:-|to|\u2013)\s*12 months"
-               r"|largest (?:total )?outstanding|outstanding by client"),
+               r"|largest (?:total )?outstanding|outstanding by client)"),
     ("principal_client", r"principal clients?|clients? by billings|largest share of billings"
                          r"|top clients? by"),
     ("dossier_standing", r"financial[- ]standing|annexure c\b|net turnover"
@@ -133,8 +141,14 @@ _ENTITY = [
                          r"|(?:value|amount) (?:stated|recorded) (?:in|on|by) the"
                          r"[^.?]{0,20}(?:reference|letter)"),
     # -- what was here before ---------------------------------------------
-    ("asset", r"plant|machinery|equipment|asset|excavator|crusher|batching|grader"
-              r"|roller|crane|tipper|gross block|fleet"),
+    # "Plant" alone is not the register: "Water Treatment Plant - Rajasthan
+    # Pkg-58" and "Material Handling Plant - Uttar Pradesh Pkg-47" are
+    # completed works, and there are twenty of them. The register is named as a
+    # register, or by a machine that only it holds.
+    ("asset", r"plant (?:&|and|\u0026) machinery|plant register|machinery register"
+              r"|\bmachinery\b|\bequipment\b|\basset\b|excavator|crusher"
+              r"|batching|grader|roller|crane|tipper|gross block|fleet"
+              r"|\bplant\b(?!\s*[\u2014\u2013-])"),
     ("account", r"trial balance|ledger account|\baccount\b|revenue|expense|payable"
                 r"|receivable account|depreciation|balance sheet"),
     ("boq_item", r"\bboq\b|bill of quantit|measured (?:total|quantit)|line item"),
