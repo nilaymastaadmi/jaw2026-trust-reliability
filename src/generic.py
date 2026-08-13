@@ -752,6 +752,16 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
     # columns nobody wrote a cue for -- measured net-neutral on a held-out set,
     # which is the right trade for a mechanism whose whole purpose is the
     # questions nobody anticipated.
+    # Whether the question asks for a PART OF A WHOLE, which the ratio below
+    # can express for any table. Computed here because the answer-type guard
+    # runs before the filters that define the part exist.
+    share_q = bool(re.search(
+        r"(?:share|percentage|proportion|fraction) of\s+(?:our |the |your |all )?"
+        r"(?:\d[\d,]*\s+)?(?:total|overall|entire|combined|whole|aggregate|all\b"
+        r"|\w+\s+(?:on|in|at)\b|\w+\b)"
+        r"|out of (?:the |our )?total"
+        r"|accounted for by[^.?]{0,60}\b(?:total|across all)\b"
+        r"|\b(?:total|across all)\b[^.?]{0,60}accounted for by", q, re.I))
     field, cued, cue_at = None, False, 0
     for pat, f in _FIELD_CUES.get(entity, ()):
         m = re.search(pat, q, re.I)
@@ -866,6 +876,11 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
                     break
         if field.endswith("_pct") or field in ("guarantee_pct", "emd_pct"):
             fn = "max" if fn in ("count", "distinct", None) else fn
+        elif share_q:
+            # A share of the whole, which the part-over-whole ratio below can
+            # express for any table. Without this the guard refused every one
+            # of them before the filters that define the part had been built.
+            fn = "sum"
         elif entity not in ("fin_line", "ar_line", "account"):
             return None
         else:
@@ -1408,19 +1423,14 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
     # one table, and the phrase "share of Total ..." is indistinguishable from
     # "share of the total". Tried first it took both of those and answered a
     # part-over-whole where a line-over-line was wanted.
-    if at == "percent" and filters and re.search(
-            r"(?:share|percentage|proportion|fraction) of\s+(?:our |the |your )?"
-            r"(?:total|overall|entire|combined|whole|aggregate|all\b)"
-            r"|out of (?:the |our )?total"
-            r"|accounted for by[^.?]{0,60}\b(?:total|across all)\b"
-            r"|\b(?:total|across all)\b[^.?]{0,60}accounted for by", q, re.I):
+    if at == "percent" and filters and share_q:
         # The measured quantity, never a percentage column: dividing one
         # percentage by another is not what "what share of the total" asks.
         _pcts = {c for c in _cols if str(c).endswith("_pct")}
-        whole = None
+        whole, named_amount = None, False
         for _pat, _f in _FIELD_CUES.get(entity, ()):
             if _f not in _pcts and re.search(_pat, q, re.I):
-                whole = _f
+                whole, named_amount = _f, True
                 break
         if whole is None and sch is not None:
             whole = sch.best_column(entity, q, exclude=set(selecting) | _pcts)
@@ -1429,6 +1439,20 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
         # Only where the filters really do select a subset. A question whose
         # only filter is the year is asking about that year as a whole.
         base = [f for f in filters if f[0] == "year"]
+        # What is being shared out: an AMOUNT, or the rows themselves. "What
+        # percentage of the 210 assets on the plant register are leased" counts
+        # assets; "what share of our total guaranteed exposure" sums rupees.
+        # ... and where the question NAMES the amount, that is what is being
+        # shared out, even though the row noun is also there. "What share of
+        # our total guaranteed bond EXPOSURE" says "bond", but the head of the
+        # phrase is the exposure; counting bonds answered a different question.
+        _rn = _ROW_NOUN.get(entity)
+        share_of_rows = not named_amount and bool(_rn and re.search(
+            r"(?:percentage|share|proportion|fraction) of\s+(?:the\s+|our\s+|all\s+)?"
+            r"(?:\d[\d,]*\s+)?(?:\w+\s+){0,3}?(?:" + _rn + r")\b", q, re.I))
+        if share_of_rows:
+            return {"entity": entity, "fn": "count", "field": whole, "op": "ratio",
+                    "filters": filters, "denominator": base}
         if whole not in _pcts and len(base) < len(filters):
             return {"entity": entity, "fn": "sum", "field": whole, "op": "ratio",
                     "filters": filters, "denominator": base}
