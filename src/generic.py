@@ -774,6 +774,25 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
         # A share of one thing in another needs a ratio -- built below, where
         # the two lines have been identified. A percentage the document STATES
         # is just a column. Anything else this cannot express.
+        if not field.endswith("_pct") and field not in ("guarantee_pct", "emd_pct"):
+            # The UNIT of the answer says which table can hold it. "For tender
+            # RFP-132004559, what does the EMD amount work out to as a
+            # percentage of the bid value" reads as a tender dossier, and the
+            # dossiers do not record a percentage at all -- the compliance
+            # matrix for the same tender states it outright. Where a
+            # better-scoring table has a percentage column its own cue list
+            # picks for this question, that table answers it.
+            for _sc, _e in (ranked if sch is not None else ()):
+                if _e == entity:
+                    break
+                _cols_e = set(gr.entities.get(_e, [{}])[0] or ())
+                for _pat, _f in _FIELD_CUES.get(_e, ()):
+                    if _f in _cols_e and _f.endswith("_pct") \
+                            and re.search(_pat, q, re.I):
+                        entity, field, cued = _e, _f, True
+                        break
+                if field.endswith("_pct"):
+                    break
         if field.endswith("_pct") or field in ("guarantee_pct", "emd_pct"):
             fn = "max" if fn in ("count", "distinct", None) else fn
         elif entity not in ("fin_line", "ar_line", "account"):
@@ -1243,6 +1262,40 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
             return {"entity": entity, "fn": "sum", "field": field, "op": "ratio",
                     "filters": base + [("account", "eq", num[1])],
                     "denominator": base + [("account", "eq", den[1])]}
+
+    # A SUBSET over the whole: "what share of our total guaranteed bond
+    # exposure (across all 60 bonds) is accounted for by Union Trust Bank".
+    # The same query twice, once filtered and once not, divided.
+    #
+    # It runs AFTER the two-line ratio above, and has to: "what share of Total
+    # Expenses does 'Employee Benefit Expenses' represent" names two LINES of
+    # one table, and the phrase "share of Total ..." is indistinguishable from
+    # "share of the total". Tried first it took both of those and answered a
+    # part-over-whole where a line-over-line was wanted.
+    if at == "percent" and filters and re.search(
+            r"(?:share|percentage|proportion|fraction) of\s+(?:our |the |your )?"
+            r"(?:total|overall|entire|combined|whole|aggregate|all\b)"
+            r"|out of (?:the |our )?total"
+            r"|accounted for by[^.?]{0,60}\b(?:total|across all)\b"
+            r"|\b(?:total|across all)\b[^.?]{0,60}accounted for by", q, re.I):
+        # The measured quantity, never a percentage column: dividing one
+        # percentage by another is not what "what share of the total" asks.
+        _pcts = {c for c in _cols if str(c).endswith("_pct")}
+        whole = None
+        for _pat, _f in _FIELD_CUES.get(entity, ()):
+            if _f not in _pcts and re.search(_pat, q, re.I):
+                whole = _f
+                break
+        if whole is None and sch is not None:
+            whole = sch.best_column(entity, q, exclude=set(selecting) | _pcts)
+        if whole is None:
+            whole = _FIELD.get(entity, "value")
+        # Only where the filters really do select a subset. A question whose
+        # only filter is the year is asking about that year as a whole.
+        base = [f for f in filters if f[0] == "year"]
+        if whole not in _pcts and len(base) < len(filters):
+            return {"entity": entity, "fn": "sum", "field": whole, "op": "ratio",
+                    "filters": filters, "denominator": base}
 
     # A work named in a question about a document ABOUT that work selects the
     # document's row: "the reference letter on file for the Pipeline Laying

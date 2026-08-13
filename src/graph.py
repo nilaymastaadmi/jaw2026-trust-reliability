@@ -492,7 +492,9 @@ class Graph:
                 keyed, key=lambda r: str(r[plan["by"]]))
             v = pick.get(plan.get("field"))
             return v if isinstance(v, (int, float)) else None
-        if op == "ratio" and plan.get("denominator"):
+        # `in`, not truthiness: an EMPTY denominator filter list is the whole
+        # table, which is exactly what "share of our total exposure" divides by.
+        if op == "ratio" and plan.get("denominator") is not None:
             num = self.run({**plan, "op": None})
             den = self.run({**plan, "op": None, "filters": plan["denominator"]})
             if num is None or not den:
