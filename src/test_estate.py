@@ -246,6 +246,10 @@ def main():
             # about them ask for.
             ("reference_letters", 132, "value", 132),
             ("reference_letters", 132, "client", 132),
+            # Named three ways across the three templates: in the verification
+            # line, after "Verification:", or as the signature block of the one
+            # that says "contact the undersigned".
+            ("reference_letters", 132, "contact", 132),
             ("bonds", 60, "amount", 60),
             ("compliance", 40, "turnover_req", 40),
             ("dossiers", 6, "bid_value", 6)]:

@@ -784,6 +784,15 @@ def reference_letters():
         if comp is None:
             comp = re.search(r"Date of Completion\s+(\d{4}-\d{2}-\d{2}"
                              r"|\d{2}/\d{2}/\d{4})", f)
+        # The person who will confirm the letter, named three ways. In the two
+        # label templates the name sits in the verification line; in the third
+        # it is the signature block, which is the last name-then-designation
+        # pair on the page.
+        contact = (re.search(r"(?:Contact for Verification|Verification):?\s*"
+                             r"([A-Z][A-Za-z.]+(?: [A-Z][A-Za-z.]+){1,2})\s*(?:\u00b7|,)", f)
+                   or re.search(r"^([A-Z][A-Za-z.]+(?: [A-Z][A-Za-z.]+){1,2})\n"
+                                r"(?:Chief|Executive|Superintending|Deputy|Project|"
+                                r"Additional|Assistant|Senior)\b", _text(doc), re.M))
         nature = re.search(r"Nature of Work\s+(.+?)\s+Contract Value", f)
         role = re.search(r"Contractor's Role\s+(Prime|JV Partner)", f)
         client = _ref_client(_text(doc))
@@ -801,6 +810,7 @@ def reference_letters():
             "letter_date": letter_date.group(1) if letter_date else None,
             "category": nature.group(1).strip() if nature else None,
             "role": role.group(1) if role else None,
+            "contact": contact.group(1).strip() if contact else None,
         })
     return out
 

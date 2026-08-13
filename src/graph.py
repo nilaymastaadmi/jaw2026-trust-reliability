@@ -330,12 +330,15 @@ class Graph:
         self.entities["segment"] = list(seg.values())
         self.entities["seven_year"] = [
             dict(r) for a in e.get("annual_tables", [])[-1:] for r in a.get("seven_year", [])]
+        # Both years, not just the latest: each report prints its own ageing and
+        # principal-clients table, and a question naming FY 2024-25 means the
+        # earlier one. Holding only the latest returned nothing for it.
         self.entities["ageing"] = [
             {**r, "year": a.get("year")}
-            for a in e.get("annual_tables", [])[-1:] for r in a.get("ageing", [])]
+            for a in e.get("annual_tables", []) for r in a.get("ageing", [])]
         self.entities["principal_client"] = [
             {**r, "year": a.get("year")}
-            for a in e.get("annual_tables", [])[-1:] for r in a.get("principal_clients", [])]
+            for a in e.get("annual_tables", []) for r in a.get("principal_clients", [])]
         # The two annual reports carry a byte-identical order-book note, so
         # holding both answers "how many contracts remained in execution" with
         # 34 rather than 17. The latest report is the one a question means.
@@ -530,6 +533,23 @@ class Graph:
             return v if isinstance(v, (int, float)) else None
         # `in`, not truthiness: an EMPTY denominator filter list is the whole
         # table, which is exactly what "share of our total exposure" divides by.
+        # "Which certification body issued the MOST of our certificates, and how
+        # many did it issue" -- group the rows, reduce each group, and report
+        # the biggest. Distinct from a plain max, which reduces a COLUMN: here
+        # the thing being compared is a property of a set of rows.
+        if op == "groupby" and plan.get("by"):
+            rows = self.select(plan["entity"], plan.get("filters"))
+            groups = {}
+            for r in rows:
+                k = r.get(plan["by"])
+                if k is not None:
+                    groups.setdefault(k, []).append(r)
+            vals = [self.reduce(g, plan.get("fn") or "count", plan.get("field"))
+                    for g in groups.values()]
+            vals = [v for v in vals if v is not None]
+            if not vals:
+                return None
+            return min(vals) if plan.get("dir") == "min" else max(vals)
         # A date, expressed as the number of days from an origin the question
         # states. The reduction picks WHICH date; the subtraction is arithmetic
         # the question asked for outright.

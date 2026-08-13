@@ -53,8 +53,11 @@ _ENTITY = [
     ("variation", r"variation orders?[^.?]{0,40}annexure|annexure[^.?]{0,40}variation order"
                   r"|\bamdt\b|value delta|variation order\b"),
     ("credit_note", r"credit notes? (?:issued|listed|table|annexure)|\bCN-\d{4}-\d+"),
-    ("seven_year", r"seven-?year|7-?year|financial summary|which fiscal year"
-                   r"|highest net revenue|by fiscal year"),
+    # "Highest net revenue" on its own is not the seven-year summary: "which
+    # work-category SEGMENT posted the highest net revenue that year" is the
+    # segment table. The summary is the one indexed BY FISCAL YEAR.
+    ("seven_year", r"seven-?year|7-?year|financial summary|by fiscal year"
+                   r"|which (?:fiscal|financial) year"),
     ("audit", r"\baudits?\b(?!\s+(?:committee|file|pack|trail|checklist|memo))"
               r"|non-?conformit|\bNCs?\b|lead auditor|surveillance audit"
               r"|re-?certification audit|audit finding|major or minor"),
@@ -62,6 +65,12 @@ _ENTITY = [
                  r"|certification bod(?:y|ies)|ORG-\d+|accreditation|valid until"
                  r"|certification date|organisational certificates?"
                  r"|issued by (?:a|the|another) body|accredited bod(?:y|ies)"),
+    # Ahead of the business unit: "among the 39 key-personnel CVs on file, how
+    # many staff belong to the X business unit" counts CVs, and names the unit
+    # only to filter them.
+    ("cv", r"curriculum vitae|\bCVs?\b|date of joining|joined the company|wage group"
+           r"|total experience|years of (?:total )?experience|highest qualification"
+           r"|been with (?:the company|us)|tenure"),
     ("business_unit", r"business unit|head-?count by|per unit head|unit head-?count"
                       r"|\bunits?\b[^.?]{0,20}head-?count"),
     ("segment", r"\bsegments?\b|segment revenue|revenue by (?:work )?categor|segmental"
@@ -132,9 +141,6 @@ _ENTITY = [
     ("credential", r"PMI-\d+|6S-\d+|ASQ-\d+"
                    r"|credential[^.?]{0,30}(?:valid|expir|issue to|how long)"
                    r"|(?:valid|expir)\w*[^.?]{0,30}credential"),
-    ("cv", r"curriculum vitae|\bCVs?\b|date of joining|joined the company|wage group"
-           r"|total experience|years of (?:total )?experience|highest qualification"
-           r"|been with (?:the company|us)|tenure"),
     ("reference_letter", r"reference letters?[^.?]{0,24}"
                          r"(?:on file|states?|records?|we hold|do we hold|carry)"
                          r"|according to the (?:client )?reference letter"
@@ -1261,6 +1267,23 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
                         "subtrahend": base + [(col, "eq", b)]}
             if hit:
                 break
+
+    # "Which certification body issued the MOST of our 5 certificates, and how
+    # many did it issue" -- the answer is the size of the biggest group, not
+    # the maximum of any column. What marks it out is a superlative of NUMBER
+    # ("the most", "the fewest", "the largest number of") over a categorical
+    # column the question names.
+    _grp = re.search(r"\bthe most\b|\bthe fewest\b|(?:largest|greatest|highest"
+                     r"|smallest|lowest) number of|\bmost of (?:our|the)\b", q, re.I)
+    if _grp and at == "count" and sch is not None:
+        by = sch.name_column(entity, q, exclude=set(selecting) | {field})
+        if by and by in _cols and not isinstance(
+                next((r.get(by) for r in gr.entities.get(entity, ())
+                      if r.get(by) is not None), None), (int, float)):
+            return {"entity": entity, "filters": filters, "op": "groupby",
+                    "by": by, "fn": "count", "field": field,
+                    "dir": "min" if re.search(r"fewest|smallest|lowest", q, re.I)
+                    else "max"}
 
     # "The completion date of the earliest-completed work, as the number of
     # DAYS AFTER 1 January 2010". The answer is a date, and the question gives
