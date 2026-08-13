@@ -127,6 +127,64 @@ def main():
         check(f"{c['doc']} audits parsed", len(c["audits"]) >= 3,
               f"{len(c['audits'])} audits")
 
+    print("\n--- annual report: its own tables, in rupees ---")
+    for a in est["annual_tables"]:
+        bs = a["balance_sheet"]
+        eq = [r for r in bs if r["section"] == "Equity and Liabilities"]
+        asset = [r for r in bs if r["section"] == "Assets"]
+        # The report's own arithmetic: each side carries a Total row, and the
+        # two sides agree.
+        te = next((r["amount"] for r in eq if r["line"].lower() == "total"), None)
+        ta = next((r["amount"] for r in asset if r["line"].lower() == "total"), None)
+        check(f"{a['doc']} balance sheet balances", near(te, ta, 2), f"{te} vs {ta}")
+        check(f"{a['doc']} equity and liabilities sum to their total",
+              near(sum(r["amount"] for r in eq if r["line"].lower() != "total"),
+                   te, 2))
+        check(f"{a['doc']} assets sum to their total",
+              near(sum(r["amount"] for r in asset if r["line"].lower() != "total"),
+                   ta, 2))
+        pl = {r["line"]: r["amount"] for r in a["profit_and_loss"]}
+        rev = pl.get("Revenue from operations (net)")
+        prof = pl.get("Profit for the year")
+        exp = sum(v for k, v in pl.items()
+                  if k not in ("Revenue from operations (net)", "Profit for the year"))
+        check(f"{a['doc']} revenue - expenses = profit for the year",
+              near(rev - exp, prof, 2), f"{rev} - {exp} != {prof}")
+        check(f"{a['doc']} four quarters", len(a["quarters"]) == 4)
+        check(f"{a['doc']} order book has 17 contracts in force",
+              len(a["order_lines"]) == a["contracts_in_execution"],
+              f"{len(a['order_lines'])} vs {a['contracts_in_execution']}")
+        check(f"{a['doc']} awarded + variations = current value on every line",
+              all(near(r["awarded"] + r["variations"], r["current_value"], 2)
+                  for r in a["order_lines"]))
+        check(f"{a['doc']} order book sums to the aggregate awarded value",
+              near(sum(r["awarded"] for r in a["order_lines"]),
+                   a["order_book_awarded"], 10 ** 5),
+              f"{sum(r['awarded'] for r in a['order_lines'])} vs "
+              f"{a['order_book_awarded']}")
+        check(f"{a['doc']} every variation row carries its four fields",
+              all(r["contract"] and r["amendment"] and r["date"]
+                  and r["value_delta"] is not None for r in a["variations"]),
+              str(len(a["variations"])))
+        check(f"{a['doc']} credit notes match the stated count",
+              len(a["credit_note_list"]) == a["credit_notes"],
+              f"{len(a['credit_note_list'])} vs {a['credit_notes']}")
+
+    # The order book is a SNAPSHOT and both reports print the same one; the
+    # variation annexures are the movements behind it, one report per year.
+    # Every variation figure the order book carries is one contract's
+    # amendments summed ACROSS both annexures -- contract #90 moved 7,593,914
+    # in FY2024-25 and 7,973,471 in FY2025-26, and the order book shows
+    # 15,567,385. That ties three tables together and breaks if any is misread.
+    per = {}
+    for a in est["annual_tables"]:
+        for v in a["variations"]:
+            per[v["contract"]] = per.get(v["contract"], 0) + v["value_delta"]
+    latest = max(est["annual_tables"], key=lambda x: x.get("year") or 0)
+    ob = {r["variations"] for r in latest["order_lines"] if r["variations"]}
+    check("every order-book variation total is a contract's amendments summed",
+          ob <= set(per.values()), f"{sorted(ob - set(per.values()))}")
+
     print("\n--- compliance matrices and dossiers ---")
     # Exactly two layouts, and each states its own length: the short checklist
     # numbers 8 requirements, the long eligibility-cum-compliance matrix 17.

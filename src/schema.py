@@ -58,6 +58,11 @@ def _tokens(text):
 _JOIN = {"and", "the", "of", "a", "for", "in", "on", "to", "epc", "b", "net"}
 
 
+# "Current Assets - Trade Receivables" is a section and a line, joined by a
+# dash of one flavour or another.
+_SECTION = re.compile(r"\s+[\u2014\u2013-]\s+")
+
+
 def _run_in(hay, needle):
     return bool(needle) and any(hay[i:i + len(needle)] == needle
                                 for i in range(len(hay) - len(needle) + 1))
@@ -205,6 +210,22 @@ class Schema:
                     if len(vw) >= 2 and _run_in(qw, vw):
                         m = re.search(r"(?<![\w])" + re.escape(vw[0]) + r"(?![\w])",
                                       q, re.I)
+                    elif _SECTION.search(low) and _run_in(
+                            qw, [w for w in re.findall(
+                                r"[a-z0-9]+", _SECTION.split(low)[-1])
+                                if w not in _JOIN]):
+                        # A label that names its SECTION and then its line --
+                        # "Current Assets - Trade Receivables", "Contract
+                        # Revenue - Tunnels". A question asks for the line, and
+                        # the section is context the reader is expected to
+                        # supply. Ambiguity is settled the same way: taken only
+                        # when one value of the column ends that way.
+                        tail = _SECTION.split(low)[-1].strip()
+                        hit = re.search(r"(?<![\w])"
+                                        + re.escape(tail).replace(r"\ ", r"\s+")
+                                        + r"(?![\w])", q, re.I)
+                        if hit:
+                            partials.append((len(tail), orig, hit))
                     elif len(vw) >= 3 and _run_in(qw, vw[:-1]):
                         # Only a PREFIX, and only the tail dropped. That is how
                         # an organisation gets shortened -- "Union Trust Bank"

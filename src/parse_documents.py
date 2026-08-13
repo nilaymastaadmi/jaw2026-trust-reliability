@@ -774,6 +774,64 @@ _SEG = re.compile(r"^([A-Z][A-Za-z &]{2,32})\n(-?[\d,]+)\n(-?[\d,]+)$", re.M)
 _SEVEN = re.compile(r"^(\d{4})[\u2013-]\d{2}\n(-?[\d,]+)\n(-?[\d,]+)\n(-?[\d,]+)\n(-?[\d.]+)%$", re.M)
 _AGE = re.compile(r"^([A-Z][A-Za-z ,&.'-]{5,60})\n(-?[\d,]+)\n(-?[\d,]+)\n(-?[\d,]+)\n(-?[\d,]+)$", re.M)
 _CLI = re.compile(r"^([A-Z][A-Za-z ,&.'-]{5,60})\n(-?[\d,]+)$", re.M)
+# The annual report's own balance sheet, profit and loss and quarterly table.
+# All three are stated directly in rupees -- unlike the financial statements,
+# which are in lakhs -- and none of them was read, so a question about the
+# balance sheet was answered from the statement extract, which carries
+# different figures under the same names.
+_AR_LINE = re.compile(r"^([A-Z][A-Za-z ,&:()'\u2014-]{4,60}?)\n"
+                      r"\(?(-?[\d,]+)\)?$", re.M)
+_QTR = re.compile(r"^(Q[1-4])\s*FY\s*(\d{4})[\u2013-]\d{2}\n(-?[\d,]+)$", re.M)
+_VARIATION = re.compile(r"^#(\d+)\n(\d+)\n(\d{2}/\d{2}/\d{4})\n"
+                        r"(-?[\d,]+)\n(.+)$", re.M)
+_CREDIT = re.compile(r"^(CN-\d{4}-\d+)\n(\d{2}/\d{2}/\d{4})\n(-?[\d,]+)\n(.+)$", re.M)
+
+
+def _order_book(txt):
+    """The order-book annexure: one row per contract in force.
+
+    The client name and the contract type both wrap, so a row is a RUN of
+    lines rather than a line. The serial anchors it, the same way the
+    compliance matrices are read: a row opens on the line that is exactly the
+    next expected number, and the three figures inside it are awarded,
+    variations and the current value in that order.
+    """
+    rows, n, buf = [], 1, None
+    for line in txt.split("\n"):
+        line = line.strip()
+        if line == str(n):
+            if buf is not None:
+                rows.append(buf)
+            buf, n = [], n + 1
+            continue
+        if buf is not None:
+            buf.append(line)
+    if buf is not None:
+        rows.append(buf)
+    out = []
+    for i, buf in enumerate(rows, 1):
+        nums = [x for x in buf if re.fullmatch(r"-?[\d,]+", x)]
+        if len(nums) < 3:
+            continue
+        words = [x for x in buf if not re.fullmatch(r"-?[\d,]+", x)]
+        status = words[-1] if words and words[-1] in ("active", "closed",
+                                                      "on hold", "suspended") else None
+        head = words[:-1] if status else words
+        # Everything before the contract TYPE is the client. The type is the
+        # last one or two fragments, and it is the only field written in
+        # lower case with a hyphen ("item-\nrate", "lump-\nsum", "epc").
+        kind, client = None, head
+        for j in range(len(head) - 1, -1, -1):
+            joined = "".join(head[j:]).lower()
+            if joined in ("epc", "item-rate", "lump-sum", "itemrate", "lumpsum"):
+                kind, client = joined.replace("itemrate", "item-rate").replace(
+                    "lumpsum", "lump-sum"), head[:j]
+                break
+        out.append({"seq": i, "client": " ".join(client).strip() or None,
+                    "type": kind, "awarded": _num(nums[0]),
+                    "variations": _num(nums[1]),
+                    "current_value": _num(nums[2]), "status": status})
+    return out
 
 
 def _section(t, start, end=None):
@@ -810,6 +868,48 @@ def annual_tables():
         clients = [{"client": m.group(1).strip(), "billings": _num(m.group(2))}
                    for m in _CLI.finditer(cli_txt)
                    if m.group(1).strip().lower() not in ("client", "billings gross")]
+        # A bracketed figure is negative in this report -- the P&L writes every
+        # expense that way -- and the balance sheet's own "Total" row is the
+        # section total, kept as a line so a question can ask for it directly.
+        def _ar_rows(txt, section):
+            rows = []
+            for m in _AR_LINE.finditer(txt):
+                label = " ".join(m.group(1).split())
+                if label.lower() in ("particulars", "equity and liabilities",
+                                     "assets", "quarter", "client", "segment"):
+                    continue
+                v = _num(m.group(2))
+                if v is None:
+                    continue
+                # A bracketed expense keeps the magnitude the report prints:
+                # revenue less the sum of the expense lines is the profit for
+                # the year, which is the identity the statement itself asserts.
+                rows.append({"line": label, "amount": v, "section": section})
+            return rows
+
+        bs = _section(t, "EQUITY AND LIABILITIES", "STATEMENT OF PROFIT")
+        i_ass = bs.find("ASSETS")
+        balance = (_ar_rows(bs[:i_ass] if i_ass > 0 else bs, "Equity and Liabilities")
+                   + (_ar_rows(bs[i_ass:], "Assets") if i_ass > 0 else []))
+        pl = _ar_rows(_section(t, "STATEMENT OF PROFIT", "NOTES TO THE"), "Profit and Loss")
+        quarters = [{"quarter": m.group(1), "year": int(m.group(2)),
+                     "net_revenue": _num(m.group(3))} for m in _QTR.finditer(t)]
+        variations_list = [
+            {"contract": int(m.group(1)), "amendment": int(m.group(2)),
+             "date": (normalize.parse_date(m.group(3)).isoformat()
+                      if normalize.parse_date(m.group(3)) else None),
+             "value_delta": _num(m.group(4)), "reason": m.group(5).strip()}
+            for m in _VARIATION.finditer(_section(t, "ANNEXURE \u2014 VARIATION ORDERS",
+                                                  "CREDIT NOTES"))]
+        order_lines = _order_book(_section(t, "ANNEXURE \u2014 ORDER BOOK",
+                                           "ANNEXURE \u2014 VARIATION"))
+        credit_list = [
+            {"credit_note": m.group(1),
+             "date": (normalize.parse_date(m.group(2)).isoformat()
+                      if normalize.parse_date(m.group(2)) else None),
+             "amount": _num(m.group(3)), "reason": m.group(4).strip()}
+            for m in _CREDIT.finditer(_section(t, "CREDIT NOTES ISSUED",
+                                               "ANNEXURE \u2014 TRADE"))]
         contracts = re.search(r"(\d+) contracts remained in execution", f)
         awarded = re.search(r"aggregate awarded value of (Rs\.?\s*[\d,.]+\s*Lakh)", f, re.I)
         variations = re.search(r"approved variations of (Rs\.?\s*[\d,.]+\s*Lakh)"
@@ -819,6 +919,9 @@ def annual_tables():
             "doc": doc, "year": int(fy.group(1)) if fy else None,
             "segments": segments, "seven_year": seven,
             "ageing": ageing, "principal_clients": clients,
+            "balance_sheet": balance, "profit_and_loss": pl,
+            "quarters": quarters, "variations": variations_list,
+            "order_lines": order_lines, "credit_note_list": credit_list,
             "contracts_in_execution": int(contracts.group(1)) if contracts else None,
             "order_book_awarded": _money(awarded.group(1)) if awarded else None,
             "variation_orders": int(variations.group(2)) if variations else None,

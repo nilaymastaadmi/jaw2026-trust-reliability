@@ -33,6 +33,21 @@ _ENTITY = [
     ("bond", r"\bbonds?\b|bank guarantee|performance guarantee|\bBGs?\b|guarante\w*"
              r"|guaranteed exposure|guarantee amount|guarantee percentage"
              r"|BND-\d+|guarantor"),
+    # The annual report's OWN tables, ahead of the financial statement's. The
+    # report prints a full balance sheet, a profit and loss, a quarterly split
+    # and four annexures, all in rupees; the statement prints an EXTRACT of a
+    # balance sheet, in lakhs, with different lines. A question saying "the
+    # balance sheet" means the whole one; one saying "the balance-sheet
+    # extract" means the statement, which is what the guard below reads.
+    ("ar_line", r"financial highlights"),
+    ("ar_balance", r"balance[- ]sheet(?![- ]extract)(?![^.?]{0,24}\bextract\b)"
+                   r"(?<!statement's balance sheet)"),
+    ("quarter", r"\bquarters?\b|\bquarterly\b|\bQ[1-4]\b"),
+    ("order_line", r"order[- ]book annexure|contracts? in force|awarded plus variations"
+                   r"|order book[^.?]{0,30}\bcontracts?\b"),
+    ("variation", r"variation orders?[^.?]{0,40}annexure|annexure[^.?]{0,40}variation order"
+                  r"|\bamdt\b|value delta|variation order\b"),
+    ("credit_note", r"credit notes? (?:issued|listed|table|annexure)|\bCN-\d{4}-\d+"),
     ("seven_year", r"seven-?year|7-?year|financial summary|which fiscal year"
                    r"|highest net revenue|by fiscal year"),
     ("audit", r"\baudits?\b(?!\s+(?:committee|file|pack|trail|checklist|memo))"
@@ -149,6 +164,9 @@ _FIELD = {
     "bond": "amount", "compliance": "complied", "iso_cert": "validity_days",
     "invoice": "invoiced",
     "segment": "current", "ageing": "total", "principal_client": "billings",
+    "ar_balance": "amount", "ar_pl": "amount", "quarter": "net_revenue",
+    "variation": "value_delta", "credit_note": "amount",
+    "order_line": "current_value",
     "seven_year": "net_revenue", "order_book": "contracts_in_execution",
     "dossier_standing": "net_profit",
     "credential": "validity_days", "cv": "tenure_days",
@@ -225,6 +243,14 @@ _FIELD_CUES = {
     "principal_client": [(r".", "billings")],
     "dossier_standing": [(r"gross billing", "gross_billings"),
                          (r"turnover", "net_turnover"), (r".", "net_profit")],
+    "order_line": [(r"current value|awarded plus|including variations", "current_value"),
+                   (r"variation", "variations"),
+                   (r"awarded", "awarded"), (r".", "current_value")],
+    "variation": [(r".", "value_delta")],
+    "credit_note": [(r".", "amount")],
+    "quarter": [(r".", "net_revenue")],
+    "ar_balance": [(r".", "amount")],
+    "ar_pl": [(r".", "amount")],
     "order_book": [(r"credit note", "credit_notes"),
                    (r"variation", "variation_orders"),
                    (r"contracts? (?:remained|still|in execution)|how many contracts",
@@ -273,8 +299,6 @@ _FIELD_CUES = {
                 (r"relevant works|past performance", "relevant_works"),
                 (r"bid|value|worth|total", "bid_value")],
     "business_unit": [(r"head-?count|people|staff|employees|strength", "headcount")],
-    "dossier_standing": [(r"gross billing", "gross_billings"),
-                         (r"turnover", "net_turnover"), (r".", "net_profit")],
     "fin_line": [(r"previous year|prior year|comparative|year before", "previous"),
                  (r".", "current")],
     "ar_line": [(r"previous year|prior year|comparative", "previous"),
@@ -346,6 +370,12 @@ _ROW_NOUN = {
     "director": r"directors?|board members?",
     "cv": r"personnel|people|staff|employees|engineers|managers|key personnel",
     "reference_letter": r"letters?|references?|testimonials?",
+    "variation": r"variation orders?|variations?|amendments?",
+    "credit_note": r"credit notes?",
+    "order_line": r"contracts?|order book (?:lines?|entries)",
+    "quarter": r"quarters?",
+    "ar_balance": r"lines?|items?",
+    "ar_pl": r"lines?|items?",
     "company_cert": r"certificates?|copies|records",
     "credential": r"credentials?|certificates?",
     "work": r"works?|projects?|contracts?|assignments?|jobs?|packages?",
@@ -420,8 +450,10 @@ def _match_values(gr, entity, q, taken):
 
 # Entities whose rows are stamped with a year, so a movement between two of
 # them is meaningful.
-_YEARLY = {"fin_line", "ar_line", "account", "ledger_account", "bank_year",
-           "bank_txn", "ledger_line"}
+# Which tables a year-on-year movement can be asked of used to be a written
+# list, and it left out dossier_standing and segment -- both of which hold one
+# row per financial year and are asked about exactly that way. The store knows:
+# a table carries a year or it does not.
 
 
 def _named_work(gr, q):
@@ -575,7 +607,9 @@ _NO_SHAPE = {"asset", "boq_item", "bond", "compliance", "iso_cert", "audit",
              "ledger_line", "director", "ar_line",
              "company_cert", "cv", "credential", "reference_letter",
              "dossier_standing", "invoice",
-             "segment", "seven_year", "ageing", "principal_client", "order_book"}
+             "segment", "seven_year", "ageing", "principal_client", "order_book",
+             "ar_balance", "ar_pl", "quarter", "variation", "credit_note",
+             "order_line"}
 
 # Works are covered by 23 shapes -- but every one of them is scoped to a single
 # client. A question about the WHOLE estate ("across the completed-works record,
@@ -1217,8 +1251,25 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
                     "field": "completed", "key": "work",
                     "op": "datespan", "subjects": pair}
 
+    # A movement between the CURRENT column and the PREVIOUS-year comparative
+    # of the same row. "Per the financial statement for the year ended 31 March
+    # 2025, by how much did Total Revenue from Operations change versus the
+    # prior year" names one year, not two: the comparative is a column of that
+    # year's statement, and the change is a subtraction across columns.
+    if at in ("money", "count") and {"current", "previous"} <= _cols \
+            and re.search(r"(?:chang\w+|mov\w+|differ\w+|grow\w+|fell|rose"
+                          r"|increas\w+|decreas\w+|swing|delta)[^.?]{0,40}"
+                          r"(?:versus|vs\.?|against|compared (?:to|with)|over)"
+                          r"\s+(?:the\s+)?(?:prior|previous|preceding|comparative"
+                          r"|last)\s+year", q, re.I):
+        signed = re.search(r"negative|signed|in that order|net figure"
+                           r"|keep the sign|preserve the sign", q, re.I)
+        return {"entity": entity, "fn": "sum", "field": "current", "op": "diff",
+                "absolute": not signed, "filters": filters,
+                "subtrahend": filters, "field_b": "previous"}
+
     # Two financial years named, and a movement asked for between them.
-    if len(years) == 2 and entity in _YEARLY and re.search(
+    if len(years) == 2 and "year" in _cols and re.search(
             r"\bmove\w*|\bchange\w*|\bdifference\b|\bgap\b|between|year[- ]on[- ]year"
             r"|\bversus\b|\bvs\b|\bgrow\w*|\bfell?\b|\brose\b|\bincrease\w*"
             r"|\bdecrease\w*|\bswing\b|\bdelta\b", q, re.I):

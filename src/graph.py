@@ -340,9 +340,44 @@ class Graph:
         # 34 rather than 17. The latest report is the one a question means.
         self.entities["order_book"] = [
             {k: v for k, v in a.items()
-             if k not in ("segments", "seven_year", "ageing", "principal_clients")}
+             if k not in ("segments", "seven_year", "ageing", "principal_clients",
+                          "balance_sheet", "profit_and_loss", "quarters",
+                          "variations", "order_lines", "credit_note_list")}
             for a in sorted(e.get("annual_tables", []),
                             key=lambda x: x.get("year") or 0)[-1:]]
+
+        # The annual report's OWN balance sheet and profit and loss, stated
+        # directly in rupees. They are not the financial statement's extract:
+        # the same line names carry different figures, because the statement is
+        # in lakhs and covers a different set of lines. A question naming the
+        # annual report means these.
+        self.entities["ar_balance"] = [
+            {**r, "year": a.get("year"), "doc": a.get("doc")}
+            for a in e.get("annual_tables", [])
+            for r in a.get("balance_sheet", [])]
+        self.entities["ar_pl"] = [
+            {**r, "year": a.get("year"), "doc": a.get("doc")}
+            for a in e.get("annual_tables", [])
+            for r in a.get("profit_and_loss", [])]
+        self.entities["quarter"] = [
+            {**r, "doc": a.get("doc")} for a in e.get("annual_tables", [])
+            for r in a.get("quarters", [])]
+        self.entities["variation"] = [
+            {**r, "year": a.get("year"), "doc": a.get("doc")}
+            for a in e.get("annual_tables", [])
+            for r in a.get("variations", [])]
+        self.entities["credit_note"] = [
+            {**r, "year": a.get("year"), "doc": a.get("doc")}
+            for a in e.get("annual_tables", [])
+            for r in a.get("credit_note_list", [])]
+        # One row per contract in force, with what was awarded, what the
+        # variations came to and the current value. Both reports print the
+        # same 17 contracts, so the later one is the estate's position.
+        self.entities["order_line"] = [
+            {**r, "year": a.get("year"), "doc": a.get("doc")}
+            for a in sorted(e.get("annual_tables", []),
+                            key=lambda x: x.get("year") or 0)[-1:]
+            for r in a.get("order_lines", [])]
 
         self.entities["ar_line"] = [
             {"year": a.get("year"), "account": k, "current": v.get("current"),
