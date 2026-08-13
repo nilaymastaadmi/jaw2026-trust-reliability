@@ -256,8 +256,17 @@ _UNIT_RANGE = {
 }
 
 
-def _unit_ok(answer_type, value):
+# A count cannot be negative -- but a CHANGE in a count can, and the corpus
+# asks for it outright: "how much did the minor-NC count change between Initial
+# Certification and Surveillance Audit 2? Report the change as a signed
+# number." Same for a span of days measured in a stated direction.
+_SIGNED_OPS = {"delta", "diff", "datespan", "epoch"}
+
+
+def _unit_ok(answer_type, value, op=None):
     lo, hi = _UNIT_RANGE.get((answer_type or "money").lower(), _UNIT_RANGE["money"])
+    if op in _SIGNED_OPS and lo == 0:
+        lo = -hi
     try:
         return lo <= float(value) <= hi
     except (TypeError, ValueError):
@@ -291,7 +300,8 @@ def _run_one(db, plan, q, medians, gr=None, sch=None):
                 # selection returns None unless every filtered column exists,
                 # in which case a count of nothing really is nothing. Screening
                 # zeros again here would discard those real answers.
-                if got is not None and not _unit_ok(q.get("answer_type"), got):
+                if got is not None and not _unit_ok(q.get("answer_type"), got,
+                                                    gp.get("op")):
                     got = None
                 if got is not None:
                     return got, "graph:" + gp["entity"] + "/" + gp["fn"]

@@ -1255,9 +1255,23 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
                     "absolute": not signed, "filters": filters,
                     "subtrahend": filters, "field_b": b}
 
-    # Two values of ONE categorical column with a subtraction between them.
-    if re.search(r"\bsubtract\b|\bminus\b|\bless\b the|take away|deduct", q, re.I):
-        for col in ("category", "segment", "account", "client", "state"):
+    # Two values of ONE categorical column, with a subtraction or a movement
+    # asked for between them. The columns are read off the store rather than
+    # listed: "how much did the minor-NC count change between Initial
+    # Certification and Surveillance Audit 2" names two values of the audit
+    # table's `type`, and no written list was ever going to have that in it.
+    if re.search(r"\bsubtract\b|\bminus\b|\bless\b the|take away|deduct"
+                 r"|(?:chang\w+|mov\w+|differ\w+|swing|delta|gap)[^.?]{0,20}between",
+                 q, re.I):
+        _cat = [c for c in ("category", "segment", "account", "client", "state")
+                if c in _cols]
+        # `selecting` is NOT excluded here. Everywhere else a column already
+        # used to pick rows cannot be the one being asked for; here it is
+        # exactly the pairing column, because naming both values is what makes
+        # the question a subtraction.
+        _cat += [c for c in sorted(sch.values.get(entity, {}) if sch else ())
+                 if c not in _cat and c != "doc"]
+        for col in _cat:
             if col not in _cols:
                 continue
             vals = {r.get(col) for r in gr.entities.get(entity, []) if r.get(col)}
@@ -1270,18 +1284,27 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
             hit.sort()
             if len(hit) == 2:
                 # "Subtract A from B" is B - A; "B subtract A" is also B - A.
+                # But "how much did it CHANGE between A and B" is B - A too:
+                # a movement runs from the first named to the second, so the
+                # minuend is the one mentioned SECOND.
                 a, b = hit[0][1], hit[1][1]
-                if re.search(r"subtract[^.?]{0,40}\bfrom\b", q, re.I):
+                if re.search(r"subtract[^.?]{0,40}\bfrom\b", q, re.I) or re.search(
+                        r"(?:chang\w+|mov\w+|swing|delta|differ\w+|gap)"
+                        r"[^.?]{0,20}between", q, re.I):
                     a, b = b, a
                 base = [f for f in filters if f[0] != col]
                 signed = re.search(r"negative|signed|in that order|net figure"
-                                   r"|report it (?:as )?negative|keep the sign", q, re.I)
+                                   r"|report it (?:as )?negative|keep the sign"
+                                   r"|as a signed|preserve the sign", q, re.I)
                 return {"entity": entity, "fn": fn if fn in ("sum", "mean") else "sum",
                         "field": field, "op": "diff", "absolute": not signed,
                         "filters": base + [(col, "eq", a)],
                         "subtrahend": base + [(col, "eq", b)]}
-            if hit:
-                break
+            # No break on a single hit. The columns are read off the store now,
+            # so the first one the question touches is often not the pairing
+            # one -- "for certificate ORG-1003 ... between Initial Certification
+            # and Surveillance Audit 2" hits `cert_no` once before it reaches
+            # `type` twice, and stopping there lost the pair.
 
     # "Which certification body issued the MOST of our 5 certificates, and how
     # many did it issue" -- the answer is the size of the biggest group, not
