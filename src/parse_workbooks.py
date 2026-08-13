@@ -130,7 +130,11 @@ def boq():
             {"ra_no": r.get("RA No"), "measured_on": iso(parse_date(str(r.get("Measured On") or ""))),
              "item_no": r.get("Item No"), "description": r.get("Description"),
              "qty": r.get("Qty Measured"), "amount": int(r.get("Amount (INR)") or 0)}
-            for r in _sheet_rows(wb["Measurements"]) if r.get("RA No") is not None
+            for r in _sheet_rows(wb["Measurements"])
+            # The sheet's last row is a TOTAL, not a measurement -- the same
+            # trap the plant register sets. Counted, it adds a row nobody
+            # measured; matched, "total" resolves the RA number to the word.
+            if isinstance(r.get("RA No"), (int, float))
         ]
         out[f"contract_{n}"] = {
             "contract_no": n,

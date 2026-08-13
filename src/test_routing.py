@@ -63,6 +63,7 @@ NAMES = [
     ("business_unit", "the head-count of each business unit"),
     ("director", "how many directors sit on the board"),
     ("invoice", "how many invoices are in the receivables ageing workbook"),
+    ("measurement", "the total measured amount in the measurement book"),
 ]
 
 # Phrasings that name something OTHER than a table, and must not be captured by

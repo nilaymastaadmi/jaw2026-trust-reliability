@@ -93,6 +93,10 @@ _ENTITY = [
                    r"|CM/\d+|pre-?qualification (?:requirement|criteri)"),
     ("dossier", r"tender dossier|bid value|\bRFP\b|RFP-\d+|earnest money|\bEMD\b"
                 r"|tender submission|bid submitted|relevant works|submission dossier"),
+    # The measurement BOOK, as against the bill of quantities: one row per
+    # item measured on one RA bill, in the contract workbook.
+    ("measurement", r"measurement[- ](?:book|register|sheet|workbook)s?"
+                    r"|measured (?:on|quantit\\w+)|\\bmeasurements? (?:tab|sheet)"),
     ("final_bill", r"final (?:RA )?bill|per the final|on the final bill"),
     ("ra_bill", r"\bRA bill|running account bill|\bRA-?\d+\b|retention"
                 r"|net claimed|value of work done|AR-\d{4}-\d+"),
@@ -197,6 +201,7 @@ _FIELD = {
     "segment": "current", "ageing": "total", "principal_client": "billings",
     "ar_balance": "amount", "ar_pl": "amount", "quarter": "net_revenue",
     "variation": "value_delta", "credit_note": "amount",
+    "measurement": "amount",
     "order_line": "current_value",
     "seven_year": "net_revenue", "order_book": "contracts_in_execution",
     "dossier_standing": "net_profit",
@@ -277,6 +282,8 @@ _FIELD_CUES = {
     "order_line": [(r"current value|awarded plus|including variations", "current_value"),
                    (r"variation", "variations"),
                    (r"awarded", "awarded"), (r".", "current_value")],
+    "measurement": [(r"\bRA bills?\b|\bRA numbers?\b|\bRA no\b", "ra_no"),
+                    (r"quantit\w+|\bqty\b", "qty"), (r".", "amount")],
     "variation": [(r".", "value_delta")],
     "credit_note": [(r".", "amount")],
     "quarter": [(r".", "net_revenue")],
@@ -404,6 +411,7 @@ _ROW_NOUN = {
     "variation": r"variation orders?|variations?|amendments?",
     "credit_note": r"credit notes?",
     "order_line": r"contracts?|order book (?:lines?|entries)",
+    "measurement": r"entries|measurements?|lines?|RA bills?",
     "quarter": r"quarters?",
     "ar_balance": r"lines?|items?",
     "ar_pl": r"lines?|items?",
@@ -637,7 +645,7 @@ def _first(pairs, text):
 # that resolved to it was refused before any plan was built -- the graph is
 # only consulted where no shape ran, and no shape reads the trial balance at
 # all, so those questions had no path to an answer.
-_NO_SHAPE = {"account",
+_NO_SHAPE = {"account", "measurement",
              "asset", "boq_item", "bond", "compliance", "iso_cert", "audit",
              "dossier", "business_unit", "fin_line", "ra_bill", "final_bill",
              "boq_line", "bank_txn", "bank_year", "ledger_account",
@@ -1070,7 +1078,8 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
             filters = [f for f in filters if f[0] != "year"]
             filters.append(("expiry_year", "eq", years[0]))
 
-    if entity in ("compliance", "dossier", "final_bill", "ra_bill", "boq_line"):
+    if entity in ("compliance", "dossier", "final_bill", "ra_bill", "boq_line",
+                  "measurement", "boq_item"):
         m = re.search(r"\b(RFP-\d+)\b", q, re.I)
         if m and entity in ("compliance", "dossier"):
             # The matrices key the tender as `tender_ref`, the dossiers as
@@ -1078,11 +1087,14 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
             filters.append(("tender_ref" if entity == "compliance" else "rfp_ref",
                             "eq", m.group(1).upper()))
         m = re.search(r"contract\s*#?\s*(\d{2,3})\b", q, re.I)
-        if m and entity in ("final_bill", "ra_bill", "boq_line"):
+        if m and entity in ("final_bill", "ra_bill", "boq_line", "measurement",
+                            "boq_item"):
             filters.append(("contract", "eq", int(m.group(1))))
-        m = re.search(r"\bRA\s*(?:bill\s*)?#?\s*(\d{1,2})\b", q, re.I)
+        m = re.search(r"\bRA\s*(?:bill|no\.?|number)?\s*#?\s*(\d{1,2})\b", q, re.I)
         if m and entity == "ra_bill":
             filters.append(("ra", "eq", int(m.group(1))))
+        elif m and entity == "measurement":
+            filters.append(("ra_no", "eq", int(m.group(1))))
         m = re.search(r"\b(AR-\d{4}-\d+)\b", q, re.I)
         if m and entity == "ra_bill":
             filters.append(("bill_no", "eq", m.group(1).upper()))
@@ -1595,7 +1607,13 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
         # own columns; the works ladder below is what carries the questions
         # that name no table at all.
         named = sch.name_column(entity, q, exclude=selecting) if sch else None
-        if named is not None and entity != "work":
+        if cued and field in _cols and field != _FIELD.get(entity):
+            # A cue named the column outright -- "how many distinct RA bills
+            # does the measurement register cover" -- and a cue is stronger
+            # evidence than a name match, because it can encode a spelling the
+            # column itself does not use.
+            pass
+        elif named is not None and entity != "work":
             field = named
         elif re.search(r"client|authorit|department", q, re.I):
             entity, field = "work", "client"
@@ -1614,6 +1632,18 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
             seen.add(f)
             dedup.append(f)
     filters = dedup
+
+    # A column being used to SELECT rows is not the column being asked for.
+    # That rule already governs the schema's column matcher; the cue list can
+    # break it, because one phrase can do both jobs -- "the total measured
+    # amount recorded against RA No. 1" names the RA number to filter on and
+    # the amount to sum, and the RA cue fired first. Where the field is pinned
+    # by an equality filter, the table's own default measure is the answer.
+    if fn in ("sum", "mean", "median") and any(
+            f[0] == field and f[1] == "eq" for f in filters):
+        default = _FIELD.get(entity)
+        if default and default in _cols and default != field:
+            field = default
     # A reduction over an ENTIRE table, with nothing selected, is an answer
     # only when the question asked for exactly that. Otherwise it is a lookup
     # whose subject was not found, and summing all 132 reference letters is a

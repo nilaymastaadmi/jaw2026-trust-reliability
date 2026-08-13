@@ -154,6 +154,18 @@ class Graph:
                 })
         self.entities["boq_item"] = items
 
+        # The measurement book: one row per item measured on one RA bill. It
+        # was parsed and then held only as a total, so "purely from Contract
+        # #75's measurement-book workbook, what is the total measured amount",
+        # "how many distinct RA bills does the measurement register cover" and
+        # "sum every entry for item 'RCC M30 for structures'" had nothing to
+        # read.
+        self.entities["measurement"] = [
+            {**m, "contract": c.get("contract_no"), "pkg": c.get("pkg"),
+             "year": _year(m.get("measured_on"))}
+            for c in (self.fin.get("boq") or {}).values()
+            for m in c.get("measurements", []) or []]
+
     def _build_clients(self):
         works = self.entities["work"]
         rec = ((self.fin.get("receivables") or {}).get("by_client") or {})
