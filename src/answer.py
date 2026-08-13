@@ -20,6 +20,7 @@ import executor
 import classify
 import generic
 import graph
+import llm
 import schema
 import router
 
@@ -96,17 +97,96 @@ _FALLBACK_CHAIN = {
 }
 
 
+_LLM_ANSWER_SCHEMA = {
+    "type": "object",
+    "properties": {"answer": {"type": "number"}, "basis": {"type": "string"}},
+    "required": ["answer", "basis"],
+    "additionalProperties": False,
+}
+
+
+def _llm_context(db, plan, limit=60):
+    """Factual rows for whatever entity the classifier did manage to resolve.
+
+    Defensive throughout: this runs only on questions that have already failed
+    everything else, so a missing attribute here must degrade to a thinner
+    prompt rather than raise into the answer loop.
+    """
+    try:
+        client = plan.get("client")
+        if not client and plan.get("work"):
+            w = db.work(plan["work"])
+            client = w.get("client") if w else None
+        if not client and plan.get("person"):
+            led = db.led_by(plan["person"])
+            client = led[0].get("client") if led else None
+        if client:
+            rows = [{k: w.get(k) for k in ("work", "value", "completed",
+                                           "category", "role", "has_ref", "grading")}
+                    for w in db.portfolio(client)[:limit]]
+            ctx = {"client": client, "works": rows}
+            ar = (db.receivables or {}).get(client)
+            if ar:
+                ctx["receivables"] = ar
+            return ctx
+        return {"clients": db.all_names}
+    except Exception:
+        return {"clients": sorted(getattr(db, "clients", []))}
+
+
+def llm_last_resort(db, plan, q):
+    """A number from the provided endpoint, or None. Never raises.
+
+    Reached ONLY after every deterministic path has failed and the alternative
+    is `fallback:typical`, a corpus-median guess. This round scores on exact
+    match with no partial credit, so that guess is worth 0 and a wrong LLM
+    answer is worth 0 -- the trade can gain and cannot lose. It never touches a
+    question the executor or the graph answered: a computed number always wins.
+
+    The model reads structured rows out of the entity store, not raw PDF text,
+    so it is arithmetic over an extraction that reconciliation already verified
+    rather than extraction and arithmetic at once.
+    """
+    if not llm.available():
+        return None
+    t = (q.get("answer_type") or "money").lower()
+    unit = {"money": "an integer number of RUPEES (1 crore = 10000000, 1 lakh = 100000)",
+            "count": "an integer count",
+            "percent": "a percentage out of 100",
+            "days": "an integer number of days"}.get(t, "a plain number")
+    got = llm.chat_json(
+        [{"role": "system", "content":
+            "You answer questions about an infrastructure contractor using ONLY the "
+            "JSON records supplied. Compute carefully. Return the final number with "
+            "no units, no separators and no symbols."},
+         {"role": "user", "content":
+            f"Records:\n{json.dumps(_llm_context(db, plan), default=str)[:60000]}\n\n"
+            f"Question: {q['question']}\n\nAnswer with {unit}."}],
+        schema=_LLM_ANSWER_SCHEMA,
+        max_tokens=4096,
+    )
+    if not got or not isinstance(got.get("answer"), (int, float)):
+        return None
+    val = got["answer"]
+    return round(val, 2) if t == "percent" else round(val)
+
+
 def fallbacks(db, plan, q, corpus_medians):
-    """Nearest shape of the CORRECT unit, then a corpus-typical value."""
+    """Nearest shape of the CORRECT unit, then the endpoint, then a typical value."""
     t = (q.get("answer_type") or "").lower()
     for shape in _FALLBACK_CHAIN.get(t, ("client_total",)):
         got = executor.run(db, {**plan, "shape": shape})
         if got is not None:
             return got, f"fallback:{shape}"
 
-    # Nothing ran. Emit a corpus-typical value of the right unit rather than 0:
-    # under proportional scoring a median guess earns partial credit, a 0 earns
-    # none, and a blank is scored as 0 anyway.
+    # Nothing deterministic ran. Ask the provided endpoint before guessing: the
+    # guess below is worth 0 under exact match, so this rung can only add.
+    got = llm_last_resort(db, plan, q)
+    if got is not None:
+        return got, "llm:last_resort"
+
+    # Still nothing. Emit a corpus-typical value of the right unit rather than a
+    # blank -- a blank and a wrong number score the same, and a row is required.
     return corpus_medians.get(t, corpus_medians["money"]), "fallback:typical"
 
 
@@ -367,6 +447,12 @@ def main():
     a = ap.parse_args()
 
     questions = load_questions(a.questions)
+    # Probe the provided endpoint once, up front. No flag: the rules make it the
+    # only permitted generative model, so it is on wherever LLM_BASE_URL exists
+    # and silently absent where it does not. Probing here rather than on the
+    # first failed question means a dead endpoint is reported at the top of the
+    # log instead of 300 questions in.
+    llm.health()
     rows = answer_all(questions)
     corpus.WORK.mkdir(parents=True, exist_ok=True)
 
@@ -420,6 +506,8 @@ def main():
             print(f"{str(shape):24s} {s:7.1f} {k:3d}   {s/max(k,1):.0%}")
         print(f"\nTOTAL {total:.1f} / {n} = {total/max(n,1):.1%}")
     print(f"\nwrote {a.out}")
+    used = sum(1 for r in rows if r["source"] == "llm:last_resort")
+    print(f"[llm] {llm.stats()}; answered {used} questions nothing else could")
     unsure = [r for r in rows if r["confidence"] < 1.0 or r["source"] != "router"]
     if unsure:
         print(f"low-confidence / fallback: {len(unsure)}")

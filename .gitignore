@@ -16,3 +16,12 @@ presentation/node_modules/
 presentation/package*.json
 presentation/*.pdf
 presentation/slide-*.jpg
+
+# Locally generated question sets and drafting notes. Not pipeline inputs, and
+# the rules forbid "lookup tables keyed to question text" -- a repo carrying
+# large question dumps invites exactly that reading of it. Kept out so a later
+# `git add -A` cannot sweep them in.
+heldout_questions*.json
+nic_test_questions.json
+*prompt*.md
+*.pptx

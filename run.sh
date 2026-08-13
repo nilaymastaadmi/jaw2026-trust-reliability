@@ -4,10 +4,12 @@
 #   ./run.sh --docs /path/to/documents --questions /path/to/questions.json \
 #            --out submission.csv
 #
-# Everything happens here: extraction, the entity store, and the answers. No
-# network is used at any point -- there are no model weights to fetch, because
-# no language model runs in the answer path. Every figure is computed in Python
-# over exactly-parsed integers.
+# Everything happens here: extraction, the entity store, and the answers. There
+# are no model weights to fetch -- we ship no embedding model, reranker or
+# vector store -- so the only network the pipeline touches is LLM_BASE_URL, the
+# endpoint provided to us, and it touches that only where the deterministic
+# path has already failed. Every figure that path produces is computed in
+# Python over exactly-parsed integers.
 set -euo pipefail
 
 DOCS=""; QUESTIONS=""; OUT="submission.csv"
@@ -39,8 +41,23 @@ export JAW_DATA="$JAW_DOCS"
 export JAW_WORK="${JAW_WORK:-$HERE/work}"
 export PYTHONIOENCODING=utf-8
 
-PY="${PYTHON:-python3}"
-command -v "$PY" >/dev/null 2>&1 || PY=python
+# Pick an interpreter that actually CARRIES the dependencies, not merely one
+# that exists. `command -v python3` succeeds on machines where python3 is a
+# stub that has never seen `pip install -r requirements.txt`, and the run then
+# dies on `import pymupdf` after the harness has already started timing it.
+PY=""
+for cand in "${PYTHON:-}" python3 python; do
+  [ -n "$cand" ] || continue
+  if command -v "$cand" >/dev/null 2>&1 \
+     && "$cand" -c "import pymupdf, openpyxl" >/dev/null 2>&1; then
+    PY="$cand"; break
+  fi
+done
+if [ -z "$PY" ]; then
+  echo "no interpreter with pymupdf+openpyxl; run: pip install -r requirements.txt" >&2
+  exit 1
+fi
+echo "[run] python    : $PY ($("$PY" --version 2>&1))"
 
 echo "[run] documents : $JAW_DOCS"
 echo "[run] questions : $QUESTIONS"

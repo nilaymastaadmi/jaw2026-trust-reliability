@@ -1,0 +1,9 @@
+# run.sh is executed by bash on the grader's Linux machine. This repo is
+# authored on Windows, where a clone without core.autocrlf=input stores CRLF --
+# and a shell script with carriage returns dies on its shebang line with
+# "bad interpreter: /usr/bin/env bash^M", which looks nothing like its cause and
+# would fail the smoke test before a single document was read. Pin it here so
+# the guarantee travels with the repo rather than with one machine's config.
+*.sh text eol=lf
+*.py text eol=lf
+requirements.txt text eol=lf
