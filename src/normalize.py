@@ -300,3 +300,20 @@ _STD_DESIG = re.compile(
 def mask_standards(text):
     """Same text, standard designations blanked, character offsets preserved."""
     return _STD_DESIG.sub(lambda m: " " * len(m.group(0)), text)
+
+
+# A document reference is not a date. "MEMORANDUM / Ref: BOARD/2026/003" heads
+# a third of the memo-style questions, and "QA/2026/006", "TREAS/2026/009",
+# "FIN/2026/033" and "CC/7/2020/012" all carry four digits that read as a year.
+# Where the memo names no other year that filters the whole table down to the
+# wrong slice; where it does, the two years look like a range and the question
+# gets no year filter at all.
+#
+# Only references that OPEN with letters are masked, so a date written
+# 28/08/2022 is left alone.
+_DOC_REF = re.compile(r"\b[A-Za-z]{2,}/[\w-]+(?:/[\w-]+)+")
+
+
+def mask_refs(text):
+    """Same text, document reference numbers blanked, offsets preserved."""
+    return _DOC_REF.sub(lambda m: " " * len(m.group(0)), text)

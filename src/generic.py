@@ -814,7 +814,7 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
     # names the standard, and read as a date it emptied the audit table.
     years = sorted({int(y) for y in
                     re.findall(r"(?<![\d-])(?:\b|FY\s*)((?:19|20)\d{2})(?!\d)",
-                               normalize.mask_standards(q))})
+                               normalize.mask_refs(normalize.mask_standards(q)))})
     # Whether this table is even dated. Filtering a CV on a year empties it --
     # a person has no year -- and an empty selection is a confident zero.
     _cols = set(gr.entities.get(entity, [{}])[0] or ())
