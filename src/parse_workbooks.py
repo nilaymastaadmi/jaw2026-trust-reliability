@@ -37,7 +37,14 @@ import openpyxl
 import corpus
 from normalize import norm_client, parse_date, iso
 
-WB = corpus.DATA / "documents" / "workbooks"
+# Wherever they sit in the tree. The evaluation nests by document type in a
+# layout we have not seen, so the workbooks are found by NAME, not by path.
+WB = corpus.DOCS
+
+
+def _wb(name):
+    """A workbook by NAME, wherever the tree puts it."""
+    return corpus.find(name) or (WB / name)
 
 
 def _sheet_rows(ws):
@@ -62,7 +69,7 @@ def _canon(name, canonical):
 
 
 def receivables(canonical):
-    ws = openpyxl.load_workbook(WB / "Receivables_Ageing.xlsx", data_only=True)["AR Ageing"]
+    ws = openpyxl.load_workbook(_wb("Receivables_Ageing.xlsx"), data_only=True)["AR Ageing"]
     rows = _sheet_rows(ws)
     per = defaultdict(lambda: {"invoiced": 0, "received": 0, "outstanding": 0, "invoices": 0})
     out = []
@@ -88,7 +95,7 @@ def receivables(canonical):
 
 
 def trial_balance():
-    wb = openpyxl.load_workbook(WB / "Trial_Balance_by_Year.xlsx", data_only=True)
+    wb = openpyxl.load_workbook(_wb("Trial_Balance_by_Year.xlsx"), data_only=True)
     out = {}
     for ws in wb.worksheets:
         if ws.title.lower().startswith("note"):
@@ -104,7 +111,7 @@ def trial_balance():
 
 
 def assets():
-    ws = openpyxl.load_workbook(WB / "Plant_and_Machinery_Register.xlsx",
+    ws = openpyxl.load_workbook(_wb("Plant_and_Machinery_Register.xlsx"),
                                 data_only=True)["Plant Register"]
     return [
         {"asset_id": r.get("Asset ID"), "type": r.get("Type"), "make": r.get("Make"),
@@ -117,7 +124,7 @@ def assets():
 
 def boq():
     out = {}
-    for path in sorted(WB.glob("BOQ_and_Measurements_Contract_*.xlsx")):
+    for path in sorted(WB.rglob("BOQ_and_Measurements_Contract_*.xlsx")):
         n = int(path.stem.rsplit("_", 1)[-1])
         wb = openpyxl.load_workbook(path, data_only=True)
         items = [
