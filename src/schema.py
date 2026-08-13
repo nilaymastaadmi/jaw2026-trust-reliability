@@ -63,6 +63,17 @@ _JOIN = {"and", "the", "of", "a", "for", "in", "on", "to", "epc", "b", "net"}
 _SECTION = re.compile(r"\s+[\u2014\u2013-]\s+")
 
 
+# Wording that rules a value OUT rather than selecting it.
+_NEG_BEFORE = re.compile(
+    r"\b(?:not|never|excluding|except|other than|apart from|besides|rather than"
+    r"|aside from|instead of|as opposed to|leaving out|bar)\b[\s\w,'\u2018\u2019\"]{0,16}$",
+    re.I)
+
+
+def _negated_at(q, start):
+    return bool(_NEG_BEFORE.search(q[max(0, start - 40):start]))
+
+
 def _span_of(q, words):
     """The character span in `q` covering a run of words, first to last.
 
@@ -235,8 +246,11 @@ class Schema:
                                   + r"\s*".join(re.escape(w) for w in colwords)
                                   + r"\s*[:\-]?\s*" + re.escape(low) + r"(?![\w])",
                                   q, re.I)
-                    if m and (best is None or (len(orig), 1, -m.start()) > best[3]):
-                        best = (orig, m.start(), m.end(), (len(orig), 1, -m.start()))
+                    if m:
+                        _k = (0 if _negated_at(q, m.start()) else 1,
+                              len(orig), 1, -m.start())
+                        if best is None or _k > best[3]:
+                            best = (orig, m.start(), m.end(), _k)
                     continue
                 m = re.search(r"(?<![\w])" + re.escape(low) + r"(?![\w])", q, re.I)
                 if m is None and partial:
@@ -259,14 +273,21 @@ class Schema:
                                         + r"(?![\w])", q, re.I)
                         if hit:
                             partials.append((len(tail), orig, hit))
-                    elif len(vw) >= 3 and _run_in(qw, vw[:-1]):
+                    elif len(vw) >= 2 and _run_in(qw, vw[:-1]) \
+                            and (len(vw) >= 3
+                                 or (len(vw[0]) >= 4 and vw[0] not in _STOP)):
                         # Only a PREFIX, and only the tail dropped. That is how
                         # an organisation gets shortened -- "Union Trust Bank"
                         # for "Union Trust Bank of India" -- whereas dropping
                         # words from the middle turns four different clients
                         # into one.
+                        # A person is named by their first name -- "Deepa
+                        # joined the company some years back" -- and an
+                        # organisation by everything but its tail. Both are the
+                        # value minus its last word; both are taken only when
+                        # exactly one value of the column answers to it.
                         run = vw[:-1]
-                        if len(run) >= 2:
+                        if run:
                             hit = _span_of(q, run)
                             if hit:
                                 partials.append((len(run), orig, hit))
@@ -281,13 +302,19 @@ class Schema:
                 # mention, so the result never depends on iteration order.
                 n = len(re.findall(r"(?<![\w])" + re.escape(low) + r"(?![\w])",
                                    q, re.I)) or 1
-                key = (len(orig), n, -m.start())
+                # A value the question RULES OUT loses to one it does not.
+                # "Counting the 'Buildings' category strictly -- not 'Small
+                # Buildings', a separate category" names both, and the longer
+                # one won on length alone: the answer came back as the category
+                # the question had just excluded.
+                key = (0 if _negated_at(q, m.start()) else 1,
+                       len(orig), n, -m.start())
                 if best is None or key > best[3]:
                     best = (orig, m.start(), m.end(), key)
             if best is None and len(partials) == 1:
                 _, orig, hit = partials[0]
                 best = (orig, hit.start(), hit.end(),
-                        (len(orig), 1, -hit.start()))
+                        (1, len(orig), 1, -hit.start()))
             if best:
                 out.append((col, best[0], best[1], best[2]))
         # Longest match first, so a column explaining more of the question is

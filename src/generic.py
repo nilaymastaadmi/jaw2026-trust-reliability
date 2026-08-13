@@ -1250,6 +1250,12 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
             phrase = qm.group(1).strip()
             if not re.search(r"[A-Za-z]{3}", phrase):
                 continue
+            # Already explained. A phrase that resolved to a categorical value
+            # is filtered on that column; looking for it a second time as free
+            # text found "Buildings" inside the client "Central Works &
+            # Buildings Bureau" and filtered the works down to two.
+            if any(str(f[2]).lower() == phrase.lower() for f in filters):
+                continue
             best_col, best_n = None, 0
             for col in sorted(_cols):
                 if col in taken or col == "doc":
