@@ -1005,6 +1005,51 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
         elif thr and re.search(r"below|under|less than|smaller than|beneath", q, re.I):
             filters.append(("value", "lte", thr))
 
+    # A bar on a numeric column of ANY table, where the question names both the
+    # column and the figure: "how many compliance matrices state a bid value
+    # exceeding INR 60 Cr", "a dossier with a bid value between INR 120 Cr and
+    # INR 130 Cr". The works rule above is the same idea written for one table;
+    # this is it for the rest, and only where the question NAMES the column, so
+    # a figure quoted for any other reason cannot bind.
+    if entity != "work" and sch is not None and not any(
+            f[1] in ("gte", "lte") for f in filters):
+        bar_col = sch.best_column(entity, q, exclude=set(selecting))
+        lo_hi = re.search(
+            r"between\s+((?:INR|Rs\.?)?\s*[\d.,]+\s*(?:Cr|Crores?|Lakhs?|Lacs?)?)"
+            r"\s+and\s+((?:INR|Rs\.?)?\s*[\d.,]+\s*(?:Cr|Crores?|Lakhs?|Lacs?)?)",
+            q, re.I)
+        # A bar the question means SEPARATES the rows. One that selects all of
+        # them, or none, is a bar against the wrong column: "quote a minimum
+        # average turnover requirement of INR 270 Cr" put 2,700,000,000 against
+        # `requirements`, which counts 8 or 17, and emptied the table.
+        def _separating(col, preds):
+            vals = [r.get(col) for r in gr.entities.get(entity, ())]
+            vals = [v for v in vals if isinstance(v, (int, float))
+                    and not isinstance(v, bool)]
+            if not vals:
+                return False
+            keep = [v for v in vals
+                    if all(v >= x if o == "gte" else v <= x for o, x in preds)]
+            return 0 < len(keep) < len(vals)
+
+        if bar_col and bar_col in _cols and lo_hi:
+            lo, hi = normalize.money(lo_hi.group(1)), normalize.money(lo_hi.group(2))
+            if lo is not None and hi is not None and _separating(
+                    bar_col, [("gte", min(lo, hi)), ("lte", max(lo, hi))]):
+                filters.append((bar_col, "gte", min(lo, hi)))
+                filters.append((bar_col, "lte", max(lo, hi)))
+        elif bar_col and bar_col in _cols:
+            thr = normalize.threshold_from_text(q)
+            op = None
+            if thr and re.search(r"exceed\w*|above|over|at least|more than"
+                                 r"|greater than|or higher|north of", q, re.I):
+                op = "gte"
+            elif thr and re.search(r"below|under|less than|smaller than|beneath",
+                                   q, re.I):
+                op = "lte"
+            if op and _separating(bar_col, [(op, thr)]):
+                filters.append((bar_col, op, thr))
+
     if entity == "account" and "account" not in selecting:
         # Same rule as the plant register: a one-word approximation of a column
         # stands down where the schema matched a value of it outright. "The
