@@ -12,15 +12,22 @@ The organisers withheld a database; the system rebuilds it, then answers by
 executing deterministic queries against it.
 
 ```
-687 documents ──PyMuPDF──▶ parsers ──▶ db.json   (155 works, 28 clients, 39 people)
-                  │                        │
-                  └──openpyxl──▶ finance.json    │  (519 invoices, receivables)
-                                           │
-      question text ──▶ classifier ──▶ {shape, parameters}
-                                           │
-                                           ▼
-                                       executor ──▶ number
+687 documents ──PyMuPDF──▶ parsers ──▶ db.json      (155 works, 28 clients, 39 people)
+                  │                  ▶ estate.json  (bonds, matrices, certificates,
+                  │                  │               dossiers, statements, bills,
+                  └──openpyxl───────▶ finance.json   ledgers, annual reports)
+                                     │
+      question text ──▶ classifier ──▶ {shape, parameters} ──▶ executor ──▶ number
+                                     │        (23 named shapes)
+                                     └──────▶ {entity, filters, reduce, op}
+                                              41 tables, 9,973 rows
 ```
+
+Where a named shape applies it answers. Where none does, the question is
+compiled into a query over the whole store: pick a table, filter it, reduce it,
+and where a single reduction cannot say it, one of nine composition operators --
+`delta`, `diff`, `ratio`, `datespan`, `epoch`, `spread`, `argsel`, `groupby`,
+`distinct`.
 
 **No language model runs anywhere in the answer path.** Every sum, count,
 difference, mean and date span is computed in Python over exactly-parsed
@@ -90,8 +97,10 @@ starts or stops firing.
 | `src/answer.py` | questions → `work/submission.csv` |
 | `src/client_overrides.json` | the four questions the corpus cannot determine |
 | `src/reconcile.py` | diff harness for an independent second extraction |
-| `src/graph.py` | entity store and compositional query, for what no shape covers |
+| `src/parse_documents.py` | the other 312 PDFs → `work/estate.json` |
+| `src/graph.py` | entity store (41 tables) and compositional query |
 | `src/generic.py` | question → a compositional query |
+| `src/schema.py` | route by matching the question against the DATA MODEL |
 | `src/stress.py` | paraphrase harness: rewrite the released set, require the answers not to move |
 | `src/score_heldout.py` | score against any question file carrying answers |
 | `src/test_*.py` | verification suite |
@@ -208,3 +217,41 @@ certificates): **155/155 works agree on client, category, value and completion
 date, with zero conflicts.** The person index agrees with the `lead` field on
 all 155 works. Corpus invariants: 155 works · 28 clients · 132 with a reference
 letter · 23 without · ₹5,530.40 Cr total · 48 credentials (39 PMP + 9 Six Sigma).
+
+## Checking the extraction without using any questions
+
+`src/test_estate.py` reads none. Every check in it is an identity the document
+itself asserts, so it cannot be fitted to a question set — whoever generated
+these documents wrote the arithmetic into them:
+
+| | |
+|---|---|
+| RA bills | net claimed = value of work + GST − retention, at the rates each bill states |
+| final bills | BOQ items sum to executed; RA values sum to the last cumulative |
+| bank statements | opening + deposits − withdrawals = closing, and row to row |
+| P&L | total expenses = the five expense lines; revenue = contract + other |
+| annual report | both sides of the balance sheet total to the same figure; revenue less the eight expense lines is the profit for the year |
+| order book | awarded + variations = current value on every line, and the awarded column sums to the aggregate the narrative quotes |
+| variations | every order-book variation total is one contract's amendments summed across both annexures |
+| compliance | 8 or 17 numbered requirements, serials running 1..n with no gaps |
+| dossiers | head-count = the sum of its six business units; 8 annexures, 10 registrations, 5 true copies |
+
+Plus two independent readings of the same fact: **155 client completion
+certificates against 155 contractor copies** agree on value, completion date,
+category and lead, and **131 of 132 reference letters** agree with the
+certificate for the same work. (The exception is the corpus's own: one work is
+rendered 193,299,999 in one place and 19.33 Cr in another.)
+
+`src/test_determinism.py` requires the same question to get the same answer on
+every run. Python randomises set iteration order per process, and the schema
+matcher was building its column index from a bare set — so two runs of the same
+code over the same file could disagree. The whole harness is now identical
+across repeated runs on every question set.
+
+`src/test_routing.py` checks two properties of the configuration itself, and
+needs no questions either: every table in the store is one the planner may plan
+over, and no table's pattern captures another table's question. The strongest
+form of the second is free — every client, work and person name the store holds,
+fed to the router on its own. A pattern that matches one of them is matching a
+word inside a proper noun, which is how `Lakshya ENGINEERing & Construction` came
+to be read as a question about our engineers.
