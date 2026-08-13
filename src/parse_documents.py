@@ -147,12 +147,36 @@ def bonds():
 
 # Two templates, and in both the rows break across page boundaries -- a
 # requirement's text can be separated from its status by a footer, a page
-# number and a heading. Reconstructing rows from that is guesswork; counting
-# the STATUS tokens is not, and the status is the only field a question about
-# compliance actually asks for.
+# number and a heading.
+#
+# Counting the standalone STATUS tokens looks safe and is not: the evidence
+# column also contains them. "Registration No." wraps and leaves a bare "N/A"
+# on its own line in every long-format matrix, which made 17 requirements into
+# 18 and invented a requirement not met in all 19 of them.
+#
+# Both templates number their rows, so the serial is the anchor. A row opens on
+# a line that is exactly the next expected serial -- which no stray figure in
+# the evidence column can be, since 210 and 486 do not follow 8 -- and takes
+# the FIRST status token after it.
 _STATUS = re.compile(r"^(Complied|Not Complied|Partially Complied|Not complied"
                      r"|MET|NOT MET|Not Met|N/A|Pending)$", re.M)
 _MET = {"complied", "met"}
+
+
+def _requirement_rows(text):
+    rows, n, status = [], 1, None
+    for line in text.split("\n"):
+        line = line.strip()
+        if line == str(n):
+            if rows:
+                rows[-1]["status"] = status
+            rows.append({"n": n, "status": None})
+            n, status = n + 1, None
+        elif status is None and _STATUS.fullmatch(line):
+            status = line
+    if rows:
+        rows[-1]["status"] = status
+    return [r for r in rows if r["status"]]
 
 
 def compliance():
@@ -163,8 +187,10 @@ def compliance():
         f = _flat(t)
         work = re.search(r"Tender (?:Ref: )?RFP-\d+\s*(?:·|\u00b7)?\s*([A-Za-z][A-Za-z &]{3,40}?)"
                          r"\s*(?:CM/|Bid Value|\d)", f)
-        st = [m.group(1) for m in _STATUS.finditer(t)]
-        reqs = [{"n": i + 1, "status": v} for i, v in enumerate(st)]
+        reqs = _requirement_rows(t)
+        if not reqs:                    # a layout with no serials: fall back
+            reqs = [{"n": i + 1, "status": m.group(1)}
+                    for i, m in enumerate(_STATUS.finditer(t))]
         turnover = re.search(r"(?:turnover requirement\s*\(|Annual Turnover\s*>?=?\s*)"
                              r"(?:Rs\.?|INR)\s*([\d.,]+)\s*(Cr|Crore|Lakh)", f, re.I)
         staff = re.search(r"[Kk]ey technical staff\s*\((\d+)\s*minimum\)"

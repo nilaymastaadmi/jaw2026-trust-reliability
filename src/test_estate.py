@@ -128,9 +128,17 @@ def main():
               f"{len(c['audits'])} audits")
 
     print("\n--- compliance matrices and dossiers ---")
-    check("every matrix has at least 8 numbered requirements",
-          all(c["requirements"] >= 8 for c in est["compliance"]),
+    # Exactly two layouts, and each states its own length: the short checklist
+    # numbers 8 requirements, the long eligibility-cum-compliance matrix 17.
+    # Counting standalone status tokens instead gave the long one 18 -- the
+    # evidence column leaves a bare "N/A" on its own line -- which also
+    # invented one requirement not met in all 19 of them.
+    check("every matrix has 8 or 17 numbered requirements",
+          {c["requirements"] for c in est["compliance"]} == {8, 17},
           str(sorted({c["requirements"] for c in est["compliance"]})))
+    check("the serial numbers run 1..n with no gaps",
+          all([r["n"] for r in c["rows"]] == list(range(1, c["requirements"] + 1))
+              for c in est["compliance"]))
     check("complied + not complied = requirements",
           all(c["complied"] + c["not_complied"] == c["requirements"]
               for c in est["compliance"]))

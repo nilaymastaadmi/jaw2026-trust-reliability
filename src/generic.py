@@ -498,6 +498,15 @@ def _named_person(gr, q):
     return None
 
 
+_SENT_END = re.compile(r"[.?!](?:\s|$)")
+
+
+def _same_sentence(q, a, b):
+    """Whether two character positions fall in one sentence of the question."""
+    lo, hi = (a, b) if a <= b else (b, a)
+    return not _SENT_END.search(q, lo, hi)
+
+
 def _store_value(gr, entity, col, *words):
     """The value this column ACTUALLY holds that one of `words` names.
 
@@ -662,10 +671,11 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
     # columns nobody wrote a cue for -- measured net-neutral on a held-out set,
     # which is the right trade for a mechanism whose whole purpose is the
     # questions nobody anticipated.
-    field, cued = None, False
+    field, cued, cue_at = None, False, 0
     for pat, f in _FIELD_CUES.get(entity, ()):
-        if re.search(pat, q, re.I):
-            field, cued = f, True
+        m = re.search(pat, q, re.I)
+        if m:
+            field, cued, cue_at = f, True, m.start()
             break
     if field is None and sch is not None:
         field = sch.best_column(entity, q, exclude=selecting)
@@ -705,6 +715,7 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
             if any(w and w in after for w in re.split(r"[_\s]+", col) if len(w) > 3):
                 _sup_m = None
                 break
+    counts_rows = False
     if at == "count" and _sup_m and field in _COUNT_COL:
         # "smallest business unit by head-count -- how many people" says both
         # "how many" and "smallest". The superlative is the reduction; the
@@ -729,10 +740,18 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
         # raised against contract 73, per the final bill" says "bills" twice and
         # means the `ra_count` column of one final bill, not a count of final
         # bills.
-        counts_rows = fn != "min" and not cued and bool(rownoun and re.search(
+        #
+        # But only where the column is named in the SAME SENTENCE as the "how
+        # many". "Only ONE of our two formats states the EMD amount together
+        # with a percentage figure. How many of our 40 matrices use that
+        # format?" describes the column in one sentence and asks for a count of
+        # documents in the next; the column name there is background, not the
+        # thing being counted.
+        _rn = rownoun and re.search(
             r"(?:how many|number of|(?<!head-)(?<!head )count of)"
-            r"\s+(?:\w+\s+){0,6}?(?:" + rownoun + r")",
-            q, re.I))
+            r"\s+(?:\w+\s+){0,6}?(?:" + rownoun + r")", q, re.I)
+        counts_rows = fn != "min" and bool(_rn) and not (
+            cued and _same_sentence(q, cue_at, _rn.start()))
         if rownoun is not None or fn not in ("min", "max"):
             fn = "count" if (counts_rows or field not in _COUNT_COL) else "sum"
     elif at == "money" and fn in ("count", "distinct", None):
@@ -1033,10 +1052,28 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
     # matrices quoting a ten-person minimum do not add up to four hundred; the
     # answer is the bar. Only an explicit aggregating word overrides that, and
     # it applies whatever unit the answer is in.
-    if field in _STATED and not re.search(_AGG_WORD, q, re.I) \
+    # ... but "how many of our 40 matrices use that format" counts MATRICES.
+    # The row-noun test above already decided that; the stated-bar shortcut has
+    # to respect it, or a count of documents comes back as the bar they quote.
+    if field in _STATED and not counts_rows and not re.search(_AGG_WORD, q, re.I) \
             and not (at == "count" and normalize.threshold_from_text(q)):
         return {"entity": entity, "filters": filters, "field": field,
                 "fn": "min" if re.search(r"\blowest\b|\bsmallest\b", q, re.I) else "max"}
+
+    # "How many of our 40 matrices state the EMD amount with a percentage" --
+    # a count of the rows that RECORD the field at all. Only where the column
+    # was named by a cue rather than guessed, and where the question names no
+    # value for it: with a value the question is asking how many rows match it,
+    # which the rule below answers.
+    if at == "count" and counts_rows and cued \
+            and normalize.threshold_from_text(q) is None \
+            and re.search(r"\b(?:states?|stating|quotes?|quoting|carr(?:y|ies|ying)"
+                          r"|records?|recording|shows?|showing|gives?|giving"
+                          r"|cites?|citing|includ\w+|lists?|listing|specif\w+)\b",
+                          q, re.I) \
+            and any(r.get(field) is None for r in gr.entities.get(entity, ())):
+        return {"entity": entity, "fn": "count", "field": field,
+                "filters": filters + [(field, "exists", True)]}
 
     # "How many of the forty matrices quote a minimum turnover of INR 240 Cr" --
     # a count of the rows whose stated bar EQUALS a figure the question gives.
@@ -1249,7 +1286,13 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
     # only when the question asked for exactly that. Otherwise it is a lookup
     # whose subject was not found, and summing all 132 reference letters is a
     # confident wrong number where the ladder would have earned partial credit.
-    if not filters and fn != "count" and len(gr.entities.get(entity, [])) > 20 \
+    # `min` and `max` are exempt: they are only chosen when the question
+    # carries a superlative, and "which tender's matrix states the single
+    # highest bid value" is a whole-table reduction by construction. What the
+    # guard is really for is `sum` -- a lookup that found nothing must not come
+    # back as the total of every row in the table.
+    if not filters and fn not in ("count", "min", "max") \
+            and len(gr.entities.get(entity, [])) > 20 \
             and not (estate or re.search(_ESTATE, q, re.I)
                      or re.search(_AGG_WORD, q, re.I)):
         return None

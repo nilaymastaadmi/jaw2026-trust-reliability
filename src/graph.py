@@ -359,6 +359,11 @@ class Graph:
         "lt": lambda a, b: a < b,
         "lte": lambda a, b: a <= b,
         "contains": lambda a, b: b.lower() in str(a).lower(),
+        # Presence. select() already drops a row whose value is None before any
+        # comparison runs, so "the field is stated" is a filter that always
+        # holds for the rows that reach the predicate -- which is exactly what
+        # "how many of the forty matrices state an EMD percentage" asks for.
+        "exists": lambda a, b: bool(b),
     }
 
     def _apply(self, entity, filters):
