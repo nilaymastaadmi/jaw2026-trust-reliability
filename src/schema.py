@@ -177,6 +177,12 @@ class Schema:
         out = []
         for col, vals in self.values.get(entity, {}).items():
             best = None
+            # Values the question names only in PART -- "Union Trust Bank" for
+            # "Union Trust Bank of India". Collected rather than taken, because
+            # a partial name is evidence only when ONE value answers to it: a
+            # question saying "Public Works Department" names four clients and
+            # picking any of them would be a guess.
+            partials = []
             colwords = [w for w in re.split(r"[_\s]+", col) if len(w) > 2]
             for low, orig in vals.items():
                 if len(low) < 4:
@@ -199,6 +205,18 @@ class Schema:
                     if len(vw) >= 2 and _run_in(qw, vw):
                         m = re.search(r"(?<![\w])" + re.escape(vw[0]) + r"(?![\w])",
                                       q, re.I)
+                    elif len(vw) >= 3 and _run_in(qw, vw[:-1]):
+                        # Only a PREFIX, and only the tail dropped. That is how
+                        # an organisation gets shortened -- "Union Trust Bank"
+                        # for "Union Trust Bank of India" -- whereas dropping
+                        # words from the middle turns four different clients
+                        # into one.
+                        run = vw[:-1]
+                        if len(run) >= 2:
+                            hit = re.search(r"(?<![\w])" + re.escape(run[0])
+                                            + r"(?![\w])", q, re.I)
+                            if hit:
+                                partials.append((len(run), orig, hit))
                 if m is None:
                     continue
                 # Which of two values of the SAME column the question means.
@@ -213,6 +231,10 @@ class Schema:
                 key = (len(orig), n, -m.start())
                 if best is None or key > best[3]:
                     best = (orig, m.start(), m.end(), key)
+            if best is None and len(partials) == 1:
+                _, orig, hit = partials[0]
+                best = (orig, hit.start(), hit.end(),
+                        (len(orig), 1, -hit.start()))
             if best:
                 out.append((col, best[0], best[1], best[2]))
         # Longest match first, so a column explaining more of the question is

@@ -1015,8 +1015,21 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
     # A comparison the question states about the measured column: "bonds that
     # carry a NON-ZERO guaranteed amount", "works worth MORE THAN INR 20 Cr".
     # Without it the qualifier is silently dropped and every row is counted.
-    if re.search(r"non-?zero|greater than zero|above zero|positive|actually carr\w+"
-                 r"|that state one|which state a", q, re.I):
+    # "positive if the account closes Dr, negative if Cr" is telling the answerer
+    # how to SIGN the number, not asking for the rows above zero. A conditional
+    # around it -- if / when / where / whether -- is the tell, and reading it as
+    # a predicate emptied the ledger on every question that spelled the
+    # convention out.
+    _pos = re.search(r"non-?zero|greater than zero|above zero|positive"
+                     r"|actually carr\w+|that state one|which state a", q, re.I)
+    _instruction = _pos is not None and (
+        # "positive IF the account closes Debit" -- a rule for signing the
+        # answer, whose condition follows the word.
+        re.match(r".{0,34}?\b(?:if|when|whether)\b", q[_pos.end():], re.I | re.S)
+        # "give it as recorded (i.e. positive ...)" -- the rule is introduced.
+        or re.search(r"(?:i\.e\.|\bie\b|as recorded|report it|give it|\bsigned\b"
+                     r"|\bmeaning\b)[^?]{0,20}$", q[:_pos.start()], re.I))
+    if _pos and not _instruction:
         filters.append((field, "gt", 0))
     elif re.search(r"of zero\b|\bzero rupees|equal to zero|amount of nil|\bnil\b", q, re.I):
         filters.append((field, "eq", 0))
