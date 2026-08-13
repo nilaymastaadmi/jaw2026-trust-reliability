@@ -98,6 +98,18 @@ _ENTITY = [
     ("measurement", r"measurement[- ](?:book|register|sheet|workbook)s?"
                     r"|measured (?:on|quantit\\w+)|\\bmeasurements? (?:tab|sheet)"),
     ("final_bill", r"final (?:RA )?bill|per the final|on the final bill"),
+    # The RA bill register inside each final bill, as against the six RA bill
+    # PDFs. A question about the billing PERIOD, or about how many bills a
+    # contract ran to, means the register.
+    # The billing PERIOD is a fact the final bill states, running from the
+    # first RA bill to the final bill itself -- not to the last RA bill, which
+    # is a month or two earlier.
+    ("final_bill", r"billing period"),
+    # No pattern for `ra_line`. "Contract #76 on our RA bill REGISTER belongs
+    # to X -- how many completed works does X have" names the register only to
+    # identify a client, and a pattern for it captured the question outright.
+    # The register is in the store and the schema reaches it where the question
+    # is really about the bills.
     ("ra_bill", r"\bRA bill|running account bill|\bRA-?\d+\b|retention"
                 r"|net claimed|value of work done|AR-\d{4}-\d+"),
     # BOQ lines before the bill that carries them: "the BOQ line items on
@@ -201,7 +213,7 @@ _FIELD = {
     "segment": "current", "ageing": "total", "principal_client": "billings",
     "ar_balance": "amount", "ar_pl": "amount", "quarter": "net_revenue",
     "variation": "value_delta", "credit_note": "amount",
-    "measurement": "amount",
+    "measurement": "amount", "ra_line": "value",
     "order_line": "current_value",
     "seven_year": "net_revenue", "order_book": "contracts_in_execution",
     "dossier_standing": "net_profit",
@@ -350,7 +362,8 @@ _FIELD_CUES = {
                 (r"net claimed|net of|claimed", "net_claimed"),
                 (r"cumulative", "cumulative"),
                 (r"value of work|work done|executed", "value_of_work")],
-    "final_bill": [(r"how many RA|RA bills?[^.?]{0,20}(?:raised|against|total)"
+    "final_bill": [(r"billing period|over how many days", "period_days"),
+                   (r"how many RA|RA bills?[^.?]{0,20}(?:raised|against|total)"
                     r"|number of RA", "ra_count"),
                    # The gap against the REVISED value is a different column
                    # from the gap against the awarded value, and a question
@@ -412,6 +425,7 @@ _ROW_NOUN = {
     "credit_note": r"credit notes?",
     "order_line": r"contracts?|order book (?:lines?|entries)",
     "measurement": r"entries|measurements?|lines?|RA bills?",
+    "ra_line": r"RA bills?|running[- ]account bills?|bills?",
     "quarter": r"quarters?",
     "ar_balance": r"lines?|items?",
     "ar_pl": r"lines?|items?",
@@ -645,7 +659,7 @@ def _first(pairs, text):
 # that resolved to it was refused before any plan was built -- the graph is
 # only consulted where no shape ran, and no shape reads the trial balance at
 # all, so those questions had no path to an answer.
-_NO_SHAPE = {"account", "measurement",
+_NO_SHAPE = {"account", "measurement", "ra_line",
              "asset", "boq_item", "bond", "compliance", "iso_cert", "audit",
              "dossier", "business_unit", "fin_line", "ra_bill", "final_bill",
              "boq_line", "bank_txn", "bank_year", "ledger_account",
@@ -937,6 +951,16 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
     # the FY2020-21 statement -- is applied by normalize.fiscal_years on the way
     # in, so `q` already spells it the store's way. Doing it a second time here
     # would put every such question a year EARLY.
+    # "The LATEST Annual Report's ageing annexure" names no year and means the
+    # most recent one. Both reports are held, so without this the question
+    # ranged over two years of a table that has one row per client per year.
+    if not years and "year" in _cols and re.search(
+            r"\b(?:latest|most recent|current|newest|last)\b[^.?]{0,30}"
+            r"(?:report|statement|year|annexure|table|register|book)", q, re.I):
+        _ys = [r.get("year") for r in gr.entities.get(entity, ())
+               if isinstance(r.get("year"), int)]
+        if _ys:
+            years = [max(_ys)]
     if len(years) == 1 and (_cols & {"year", "expiry_year", "acquired"}):
         if entity == "account":
             fy = [r["year"] for r in gr.entities["account"]
@@ -1079,7 +1103,7 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
             filters.append(("expiry_year", "eq", years[0]))
 
     if entity in ("compliance", "dossier", "final_bill", "ra_bill", "boq_line",
-                  "measurement", "boq_item"):
+                  "measurement", "boq_item", "ra_line"):
         m = re.search(r"\b(RFP-\d+)\b", q, re.I)
         if m and entity in ("compliance", "dossier"):
             # The matrices key the tender as `tender_ref`, the dossiers as
@@ -1088,7 +1112,7 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
                             "eq", m.group(1).upper()))
         m = re.search(r"contract\s*#?\s*(\d{2,3})\b", q, re.I)
         if m and entity in ("final_bill", "ra_bill", "boq_line", "measurement",
-                            "boq_item"):
+                            "boq_item", "ra_line"):
             filters.append(("contract", "eq", int(m.group(1))))
         m = re.search(r"\bRA\s*(?:bill|no\.?|number)?\s*#?\s*(\d{1,2})\b", q, re.I)
         if m and entity == "ra_bill":
@@ -1402,16 +1426,48 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
     # ("the most", "the fewest", "the largest number of") over a categorical
     # column the question names.
     _grp = re.search(r"\bthe most\b|\bthe fewest\b|(?:largest|greatest|highest"
-                     r"|smallest|lowest) number of|\bmost of (?:our|the)\b", q, re.I)
-    if _grp and at == "count" and sch is not None:
-        by = sch.name_column(entity, q, exclude=set(selecting) | {field})
-        if by and by in _cols and not isinstance(
-                next((r.get(by) for r in gr.entities.get(entity, ())
-                      if r.get(by) is not None), None), (int, float)):
+                     r"|smallest|lowest) (?:number of|total)"
+                     r"|\bmost of (?:our|the)\b", q, re.I)
+    if _grp and at in ("count", "money") and sch is not None \
+            and (at == "count" or re.search(r"(?:highest|largest|greatest) total",
+                                            q, re.I)):
+        # A group key has to GROUP, and a DATE never does: one row per day is
+        # not a grouping, and "which single work category has delivered the
+        # highest total value" resolved `completed` -- 155 dates over 155 works
+        # -- out of the words "completed-works estate".
+        _rows = gr.entities.get(entity, ())
+        _dates = {c for c in _cols if re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}", str(next((r.get(c) for r in _rows
+                                            if r.get(c) is not None), "")))}
+        by = sch.name_column(entity, q,
+                             exclude=set(selecting) | _dates | {field})
+        _vals = [r.get(by) for r in _rows] if by else []
+        _distinct = len({v for v in _vals if v is not None})
+        if by and by in _cols and 1 < _distinct < len(_rows) \
+                and not isinstance(
+                    next((v for v in _vals if v is not None), None), (int, float)):
             return {"entity": entity, "filters": filters, "op": "groupby",
-                    "by": by, "fn": "count", "field": field,
+                    "by": by, "fn": "count" if at == "count" else "sum",
+                    "field": field,
                     "dir": "min" if re.search(r"fewest|smallest|lowest", q, re.I)
                     else "max"}
+
+    # The span a whole set of dates covers, both ends read off one column:
+    # "how many days elapsed between the earliest and the latest completion
+    # date", "over how many days did the billing period run, from the first RA
+    # bill to the final one".
+    if at == "days" and re.search(
+            r"(?:between|from)\s+the\s+(?:earliest|first|oldest|opening)"
+            r"[^.?]{0,40}\b(?:and|to)\s+the\s+(?:latest|last|final|most recent"
+            r"|newest|closing)"
+            r"|(?:first|earliest)[^.?]{0,30}\bto\s+the\s+(?:final|last|latest)",
+            q, re.I):
+        dated = next((c for c in ("completed", "date", "measured_on", "issue_date",
+                                  "joined", "letter_date", "initial_date")
+                      if c in _cols), None)
+        if dated:
+            return {"entity": entity, "filters": filters, "op": "spread",
+                    "field": dated, "fn": "max"}
 
     # "The completion date of the earliest-completed work, as the number of
     # DAYS AFTER 1 January 2010". The answer is a date, and the question gives

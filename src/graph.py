@@ -250,6 +250,16 @@ class Graph:
         self.entities["final_bill"] = [{k: v for k, v in b.items()
                                         if k not in ("items", "bills")}
                                        for b in e.get("final_bills", [])]
+        # The RA bill REGISTER: every running-account bill each final bill
+        # lists, with its date, value and cumulative position. Six PDFs cover
+        # six RA bills between them; the registers cover 84. Held only as a
+        # count, "over how many days did the billing period run, from the first
+        # RA bill to the final one" had two dates where it needed fourteen.
+        self.entities["ra_line"] = [
+            {**r, "contract": b.get("contract"), "client": b.get("client"),
+             "year": _year(r.get("date"))}
+            for b in e.get("final_bills", []) for r in b.get("bills", []) or []]
+
         self.entities["boq_line"] = [
             {**i, "contract": b.get("contract"), "client": b.get("client")}
             for b in e.get("final_bills", []) for i in b.get("items", [])] + [
@@ -562,6 +572,17 @@ class Graph:
             if not vals:
                 return None
             return min(vals) if plan.get("dir") == "min" else max(vals)
+        # The span a set of dates covers: "how many days elapsed between the
+        # earliest and the latest completion date across all 155 works", "over
+        # how many days did the billing period run, from the first RA bill to
+        # the final one". Both ends are picked from the same column.
+        if op == "spread" and plan.get("field"):
+            rows = self.select(plan["entity"], plan.get("filters"))
+            days = [_date(r.get(plan["field"])) for r in rows]
+            days = [d for d in days if d is not None]
+            if len(days) < 2:
+                return None
+            return (max(days) - min(days)).days
         # A date, expressed as the number of days from an origin the question
         # states. The reduction picks WHICH date; the subtraction is arithmetic
         # the question asked for outright.

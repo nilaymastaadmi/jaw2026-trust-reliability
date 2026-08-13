@@ -483,6 +483,9 @@ def final_bills():
         variations = _after(t, "Approved Variations",
                             r"(INR\s*[\d.,]+\s*(?:Cr|Crore|Lakh)s?)")
         period = _after(t, "Period", r"(.+)")
+        _pm = re.search(r"(.+?)\s*[\u2014\u2013-]\s*(.+)", period or "")
+        _p_from = normalize.parse_date(_pm.group(1)) if _pm else None
+        _p_to = normalize.parse_date(_pm.group(2)) if _pm else None
         items = [{"item": int(m.group(1)), "description": " ".join(m.group(2).split()),
                   "unit": m.group(3), "rate": _num(m.group(4)),
                   "quantity": float(m.group(5).replace(",", "")),
@@ -507,7 +510,15 @@ def final_bills():
             "executed": ex,
             "gap": (aw - ex) if (aw is not None and ex is not None) else None,
             "revised_gap": (rv - ex) if (rv is not None and ex is not None) else None,
-            "period": period, "items": items, "bills": bills,
+            "period": period,
+            # The billing period the final bill STATES, which runs from the
+            # first RA bill to the final bill itself -- not to the last RA
+            # bill, which is a month or two earlier. Derived from the RA
+            # register it would be wrong by that much.
+            "period_from": _p_from.isoformat() if _p_from else None,
+            "period_to": _p_to.isoformat() if _p_to else None,
+            "period_days": (_p_to - _p_from).days if (_p_from and _p_to) else None,
+            "items": items, "bills": bills,
         })
     return out
 
