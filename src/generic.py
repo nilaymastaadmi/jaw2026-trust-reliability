@@ -1227,6 +1227,33 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
             taken.add(col)
     filters += _match_values(gr, entity, q, taken)
 
+    # A phrase the question puts in QUOTES is a literal to look for. Where it
+    # appears inside the values of a text column -- and only inside some of
+    # them, so it separates -- that is the filter: "how many 'receipt against
+    # invoice' entries appear in the FY 2019 bank statement" quotes a narration
+    # prefix, and no two rows spell the rest of it the same way.
+    if not any(f[1] == "contains" for f in filters):
+        for qm in re.finditer(r"['‘“\"]([^'’”\"]{6,60})"
+                              r"['’”\"]", q):
+            phrase = qm.group(1).strip()
+            if not re.search(r"[A-Za-z]{3}", phrase):
+                continue
+            best_col, best_n = None, 0
+            for col in sorted(_cols):
+                if col in taken or col == "doc":
+                    continue
+                vals = [r.get(col) for r in gr.entities.get(entity, ())]
+                text = [v for v in vals if isinstance(v, str)]
+                if len(text) < 2:
+                    continue
+                n = sum(1 for v in text if phrase.lower() in v.lower())
+                if 0 < n < len(text) and n > best_n:
+                    best_col, best_n = col, n
+            if best_col:
+                filters.append((best_col, "contains", phrase))
+                taken.add(best_col)
+                break
+
     # A bar the document STATES, repeated identically on every copy -- the
     # minimum staff count, the 5% guarantee, the INR 100 stamp paper. Forty
     # matrices quoting a ten-person minimum do not add up to four hundred; the
