@@ -370,6 +370,16 @@ def dossiers():
 _FS_LINE = re.compile(r"^([A-Z][^\n]{3,70}?)\n(-?[\d,]+)\n(-?[\d,]+)$", re.M)
 _FS_ONE = re.compile(r"^(Profit Before Tax|Tax Expense \(current \+ deferred\)|Profit After Tax)\n(-?[\d,]+)$", re.M)
 _LAKH = 10 ** 5
+_FS_SECTION = re.compile(
+    r"^(EQUITY AND LIABILITIES|ASSETS|[A-D]\. [A-Z][A-Za-z ()&+-]+)$", re.M)
+_FS_SECTIONS = {
+    "EQUITY AND LIABILITIES": "Equity and Liabilities",
+    "ASSETS": "Assets",
+    "A. REVENUE FROM OPERATIONS": "Revenue from Operations",
+    "B. EXPENSES": "Expenses",
+    "C. PROFIT BEFORE TAX (A - B)": "Profit",
+    "D. BALANCE SHEET EXTRACT": "Balance Sheet",
+}
 
 
 def financials():
@@ -381,16 +391,33 @@ def financials():
         # and the statement stops adding up.
         t = re.sub(r"\n\((A|B)\)\n", r" (\1)\n", t)
         fy = re.search(r"FY(\d{4})-\d{2}", t)
+        # Which SECTION each line sits under. The statement is a profit and
+        # loss followed by a balance-sheet extract, and "summing every Equity
+        # and Liabilities line" needs to know where one ends and the next
+        # begins -- a fact the line labels do not carry ("Reserves & Surplus"
+        # names no section at all).
+        heads = [(m.start(), m.group(1)) for m in _FS_SECTION.finditer(t)]
+
+        def _section_at(pos):
+            name = None
+            for at, h in heads:
+                if at > pos:
+                    break
+                name = _FS_SECTIONS.get(h.strip().rstrip(".").upper(), h.strip())
+            return name
+
         lines = {}
         for m in _FS_LINE.finditer(t):
             key = " ".join(m.group(1).split()).rstrip(":")
             if key.lower().startswith("particulars"):
                 continue
             lines.setdefault(key, {"current": _num(m.group(2)) * _LAKH,
-                                   "previous": _num(m.group(3)) * _LAKH})
+                                   "previous": _num(m.group(3)) * _LAKH,
+                                   "section": _section_at(m.start())})
         for m in _FS_ONE.finditer(t):
             lines.setdefault(" ".join(m.group(1).split()),
-                             {"current": _num(m.group(2)) * _LAKH, "previous": None})
+                             {"current": _num(m.group(2)) * _LAKH, "previous": None,
+                              "section": _section_at(m.start())})
         out.append({"doc": doc,
                     "year": int(fy.group(1)) if fy else _num(doc.split("-")[-1]),
                     "lines": lines})

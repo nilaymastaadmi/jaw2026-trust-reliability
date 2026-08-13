@@ -39,6 +39,8 @@ _ENTITY = [
     # balance sheet, in lakhs, with different lines. A question saying "the
     # balance sheet" means the whole one; one saying "the balance-sheet
     # extract" means the statement, which is what the guard below reads.
+    # "Balance-sheet EXTRACT" is the financial statement's, not the report's.
+    ("fin_line", r"balance[- ]sheet extract|extract of the balance sheet"),
     ("ar_line", r"financial highlights"),
     ("ar_balance", r"balance[- ]sheet(?![- ]extract)(?![^.?]{0,24}\bextract\b)"
                    r"(?<!statement's balance sheet)"),
@@ -391,8 +393,9 @@ _ROW_NOUN = {
 _STATED = {"staff_min", "turnover_req", "owned_assets", "personnel",
            "guarantee_pct", "emd_pct", "gst_pct", "retention_pct",
            "relevant_works", "stamp_value"}
-_AGG_WORD = (r"\btotal(?:led|ling)?\b|in total|altogether|combined|\bsum\b"
-             r"|aggregate|added up|add up|across all")
+_AGG_WORD = (r"\btotal(?:led|ling)?\b|in total|altogether|combined"
+             r"|\bsum(?:s|med|ming)?\b"
+             r"|aggregate|added up|add up|across all|across every|for every")
 
 
 # Columns whose VALUES a question quotes verbatim: an issuing bank, a work

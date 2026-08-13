@@ -63,6 +63,40 @@ _JOIN = {"and", "the", "of", "a", "for", "in", "on", "to", "epc", "b", "net"}
 _SECTION = re.compile(r"\s+[\u2014\u2013-]\s+")
 
 
+def _span_of(q, words):
+    """The character span in `q` covering a run of words, first to last.
+
+    Recording only the FIRST word understates the match, and the caller uses
+    span length to decide which column explains more of the question. The
+    section "Revenue from Operations" then looked longer than the account
+    "Total Revenue from Operations (A)" it sits inside, claimed the text, and
+    suppressed the account -- which broke every margin question on the
+    statement.
+    """
+    if not words:
+        return None
+    first = re.search(r"(?<![\w])" + re.escape(words[0]) + r"(?![\w])", q, re.I)
+    if first is None:
+        return None
+    last = re.search(r"(?<![\w])" + re.escape(words[-1]) + r"(?![\w])",
+                     q[first.start():], re.I)
+    return _Span(first.start(),
+                 first.start() + last.end() if last else first.end())
+
+
+class _Span:
+    """Just enough of a match object for the caller: start() and end()."""
+
+    def __init__(self, a, b):
+        self._a, self._b = a, b
+
+    def start(self):
+        return self._a
+
+    def end(self):
+        return self._b
+
+
 def _run_in(hay, needle):
     return bool(needle) and any(hay[i:i + len(needle)] == needle
                                 for i in range(len(hay) - len(needle) + 1))
@@ -208,8 +242,7 @@ class Schema:
                 if m is None and partial:
                     vw = [w for w in re.findall(r"[a-z0-9]+", low) if w not in _JOIN]
                     if len(vw) >= 2 and _run_in(qw, vw):
-                        m = re.search(r"(?<![\w])" + re.escape(vw[0]) + r"(?![\w])",
-                                      q, re.I)
+                        m = _span_of(q, vw)
                     elif _SECTION.search(low) and _run_in(
                             qw, [w for w in re.findall(
                                 r"[a-z0-9]+", _SECTION.split(low)[-1])
@@ -234,8 +267,7 @@ class Schema:
                         # into one.
                         run = vw[:-1]
                         if len(run) >= 2:
-                            hit = re.search(r"(?<![\w])" + re.escape(run[0])
-                                            + r"(?![\w])", q, re.I)
+                            hit = _span_of(q, run)
                             if hit:
                                 partials.append((len(run), orig, hit))
                 if m is None:

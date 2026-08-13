@@ -229,7 +229,8 @@ class Graph:
         self.entities["fin_line"] = [
             {"year": f.get("year"), "account": k,
              "current": v.get("current"), "previous": v.get("previous"),
-             "balance": v.get("current"), "doc": f.get("doc")}
+             "balance": v.get("current"), "section": v.get("section"),
+             "doc": f.get("doc")}
             for f in e.get("financials", []) for k, v in (f.get("lines") or {}).items()]
 
         self.entities["ra_bill"] = [{k: v for k, v in b.items() if k != "items"}
