@@ -60,6 +60,7 @@ python src/test_entities.py       # client and person resolution
 python src/test_io.py             # the question file we are actually handed
 python src/test_estate.py         # extraction identities, completeness, cross-source
 python src/test_determinism.py    # the same question gets the same answer every run
+python src/test_routing.py        # every table reachable, none capturing another's question
 python src/stress.py              # 3,097 paraphrases of the released set
 ```
 
