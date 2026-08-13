@@ -36,6 +36,7 @@ import re
 import statistics
 
 import corpus
+import normalize
 
 
 def _year(iso):
@@ -69,6 +70,15 @@ class Graph:
 
     # ------------------------------------------------------------- builders
     def _build_works(self):
+        # The SECTOR each client belongs to -- government, PSU or private --
+        # which only the contractor's own 155 certificates record, and which
+        # norm_client strips from the name. Joined on here so a question can
+        # filter works by it: 79 government, 47 PSU, 29 private.
+        sector = {}
+        for c in (self.est.get("company_certs") or []):
+            if c.get("client") and c.get("client_type"):
+                sector.setdefault(normalize.norm_client(c["client"]),
+                                  c["client_type"])
         out = []
         for w in self.db.get("works", []):
             title = w.get("work") or ""
@@ -85,6 +95,7 @@ class Graph:
                 "role": w.get("role"),
                 "grading": w.get("grading"),
                 "has_ref": bool(w.get("has_ref")),
+                "client_type": sector.get(normalize.norm_client(w.get("client"))),
             })
         self.entities["work"] = out
 

@@ -663,6 +663,14 @@ def company_certs():
         f = _flat(_text(doc))
         work = re.search(r"Project Name\s+(.+?)\s+Client\s", f)
         client = re.search(r"\sClient\s+(.+?)\s*\((?:Government|Private|PSU)\)", f)
+        # The SECTOR the client belongs to, which every one of the 155
+        # contractor certificates states in brackets after the name and which
+        # normalize.norm_client strips as noise -- correctly, for grouping, but
+        # it is the only place the corpus records the fact. "How many of the
+        # 155 completed works were delivered for a client tagged as a
+        # central/state government entity, as opposed to PSU or private" needs
+        # exactly this: 79 government, 47 PSU, 29 private.
+        sector = re.search(r"\sClient\s+.+?\((government|private|psu)\)", f, re.I)
         val = re.search(r"Contract Value\s+((?:INR|Rs\.?)\s*[\d.,]+\s*(?:Cr|Crore|Lakh)s?)", f, re.I)
         comp = re.search(r"Completion Date\s+(\d{4}-\d{2}-\d{2})", f)
         pm = re.search(r"Project Manager\s+(.+?)\s+\d\.", f)
@@ -694,6 +702,7 @@ def company_certs():
             "doc": doc,
             "work": work.group(1).strip() if work else None,
             "client": client.group(1).strip() if client else None,
+            "client_type": sector.group(1).lower() if sector else None,
             "category": cat.group(1).strip() if cat else None,
             "value": _money(val.group(1)) if val else None,
             "completed": comp.group(1) if comp else None,
