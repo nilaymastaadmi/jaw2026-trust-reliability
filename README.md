@@ -34,6 +34,19 @@ difference, mean and date span is computed in Python over exactly-parsed
 integers. The classifier chooses a query shape and extracts its parameters; it
 never produces a number.
 
+## Run the pipeline
+
+```bash
+pip install -r requirements.txt
+./run.sh --docs /path/to/documents --questions /path/to/questions.json --out submission.csv
+```
+
+Walks the document tree recursively — nesting does not matter, documents are
+found by name and keyed on the id they print in their own footers. No network
+at run time, no model weights to fetch, and **no generative model anywhere in
+the answer path**: every figure is computed in Python over exactly-parsed
+integers. A cold run over 687 documents and 333 questions takes six seconds.
+
 ## Run the harness
 
 One command, from a clean checkout, against any question file:

@@ -24,6 +24,13 @@ done
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Resolve BEFORE changing directory. The documented invocation is
+# `--out submission.csv`, a path relative to wherever the caller stands; run
+# from src/ it would land there instead and look like the run produced nothing.
+case "$QUESTIONS" in /*) ;; *) QUESTIONS="$PWD/$QUESTIONS" ;; esac
+case "$OUT" in /*) ;; *) OUT="$PWD/$OUT" ;; esac
+mkdir -p "$(dirname "$OUT")"
+
 # The tree we are handed is nested by document type in a layout we have not
 # seen, so nothing may depend on the shipped one: every document is found by
 # walking recursively and keying on the file name.
