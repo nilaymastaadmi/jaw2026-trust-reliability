@@ -108,6 +108,31 @@ def main():
         check(f"not {must_not:14s} <- {q[:52]}", got != must_not,
               f"captured by {must_not}")
 
+    print("\n--- no table pattern captures a NAME the corpus itself uses ---")
+    # The strongest version of the check above, and it needs nothing written
+    # down: every client, work and person name in the store, fed to the router
+    # on its own. A table pattern matching one of them is matching a word in a
+    # proper noun -- "Lakshya ENGINEERing & Construction" read as a question
+    # about our engineers, "Bituminous Overlay" as a BOQ line, "Water Treatment
+    # PLANT" as the machinery register.
+    #
+    # `work` and `client` are excused for each other: a question naming a
+    # client is a question about that client's works, which is where an
+    # unresolved one should land.
+    groups = [("work", [w["work"] for w in gr.entities["work"]]),
+              ("client", [c["client"] for c in gr.entities["client"]]),
+              ("person", [p["name"] for p in gr.entities["person"]])]
+    caught = {}
+    for kind, names in groups:
+        for n in names:
+            got = generic._first(generic._ENTITY, n)
+            if got is not None and got != kind and not (
+                    {kind, got} <= {"work", "client"}):
+                caught.setdefault((kind, got), n)
+    check(f"{sum(len(g[1]) for g in groups)} names, {len(caught)} captured",
+          not caught,
+          "; ".join(f"{k[0]} '{v}' -> {k[1]}" for k, v in caught.items()))
+
     print()
     if fail:
         print(f"FAILURES: {len(fail)}")

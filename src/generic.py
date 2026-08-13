@@ -90,7 +90,7 @@ _ENTITY = [
     # BOQ lines before the bill that carries them: "the BOQ line items on
     # contract #71" names both, and the line items are what is being asked for.
     ("boq_line", r"\bboq\b|bill of quantit|line items?\b|earthwork|macadam"
-                 r"|bituminous|granular sub-?base|reinforcement steel"
+                 r"|bituminous (?!overlay)|granular sub-?base|reinforcement steel"
                  r"|measured (?:total|quantit)"),
     ("final_bill", r"final bill|awarded value|contract\s*#?\s*\d{2}\b"
                    r"|executed value|approved variations|revised value"),
@@ -154,7 +154,10 @@ _ENTITY = [
     ("boq_item", r"\bboq\b|bill of quantit|measured (?:total|quantit)|line item"),
     ("invoice", r"\binvoices?\b|ageing workbook|receivables[- ]ageing"
                 r"|\bbilled\b|receipts?\b|ageing"),
-    ("person", r"engineer|personnel|staff|employee|people|\bperson\b"),
+    # Word-bounded, or "Lakshya ENGINEERing & Construction" -- a client, on
+    # four completed works -- reads as a question about our own engineers.
+    ("person", r"\bengineers?\b|\bpersonnel\b|\bstaff\b|\bemployees?\b"
+               r"|\bpeople\b|\bperson\b"),
     # `client` as the UNIT BEING COUNTED, not as a scope phrase. "across all
     # clients", "our clients graded Very Good" and "forget one client" are all
     # questions about works, and a loose `\bclients?\b` claimed every one of
@@ -895,7 +898,9 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
     # names the standard, and read as a date it emptied the audit table.
     years = sorted({int(y) for y in
                     re.findall(r"(?<![\d-])(?:\b|FY\s*)((?:19|20)\d{2})(?!\d)",
-                               normalize.mask_refs(normalize.mask_standards(q)))})
+                               normalize.mask_epoch(
+                                   normalize.mask_refs(
+                                       normalize.mask_standards(q))))})
     # Whether this table is even dated. Filtering a CV on a year empties it --
     # a person has no year -- and an empty selection is a confident zero.
     _cols = set(gr.entities.get(entity, [{}])[0] or ())
@@ -1256,6 +1261,31 @@ def plan(db, gr, question, answer_type=None, client=None, category=None,
                         "subtrahend": base + [(col, "eq", b)]}
             if hit:
                 break
+
+    # "The completion date of the earliest-completed work, as the number of
+    # DAYS AFTER 1 January 2010". The answer is a date, and the question gives
+    # the origin to measure it from -- so the reduction picks the date and the
+    # subtraction is arithmetic the question itself specifies.
+    if at == "days":
+        ep = re.search(r"\bdays?\s+(?:after|since|from|following|elapsed since)"
+                       r"\s+(?:the\s+)?"
+                       r"(\d{1,2}\s+\w+\s+\d{4}|\w+\s+\d{1,2},?\s+\d{4}"
+                       r"|\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4})", q, re.I)
+        if ep is None:
+            ep = re.search(r"(?:expressed|stated|given|reported|answer(?:ed)?)"
+                           r"[^.?]{0,20}as\s+(?:the\s+)?(?:number of\s+)?days?"
+                           r"\s+(?:after|since|from)\s+(?:the\s+)?"
+                           r"(\d{1,2}\s+\w+\s+\d{4}|\w+\s+\d{1,2},?\s+\d{4}"
+                           r"|\d{4}-\d{2}-\d{2})", q, re.I)
+        origin = normalize.parse_date(ep.group(1)) if ep else None
+        dated = next((c for c in ("completed", "joined", "issue_date", "date",
+                                  "letter_date", "initial_date", "valid_until")
+                      if c in _cols), None)
+        if origin and dated:
+            late = re.search(r"most recent(?:ly)?|latest|newest|last\b", q, re.I)
+            return {"entity": entity, "filters": filters, "op": "epoch",
+                    "origin": origin.isoformat(), "field": dated,
+                    "fn": "max" if late else "min"}
 
     # "The MOST RECENTLY issued bond", "the FIRST work to complete". A
     # superlative over a date picks a row; the question then asks for some

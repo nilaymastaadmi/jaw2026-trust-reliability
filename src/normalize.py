@@ -317,3 +317,18 @@ _DOC_REF = re.compile(r"\b[A-Za-z]{2,}/[\w-]+(?:/[\w-]+)+")
 def mask_refs(text):
     """Same text, document reference numbers blanked, offsets preserved."""
     return _DOC_REF.sub(lambda m: " " * len(m.group(0)), text)
+
+
+# "Answer as the number of days after 1 January 2010" gives the ORIGIN to
+# measure from. It is not a year the question is asking about, and filtering
+# the works to 2010 because of it is the same mistake as reading a memo's
+# reference number as a date.
+_EPOCH_PHRASE = re.compile(
+    r"\bdays?\s+(?:after|since|from|following|elapsed since)\s+(?:the\s+)?"
+    r"(?:\d{1,2}\s+\w+\s+\d{4}|\w+\s+\d{1,2},?\s+\d{4}"
+    r"|\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4})", re.I)
+
+
+def mask_epoch(text):
+    """Same text, the stated day-count origin blanked, offsets preserved."""
+    return _EPOCH_PHRASE.sub(lambda m: " " * len(m.group(0)), text)

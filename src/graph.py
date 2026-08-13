@@ -530,6 +530,18 @@ class Graph:
             return v if isinstance(v, (int, float)) else None
         # `in`, not truthiness: an EMPTY denominator filter list is the whole
         # table, which is exactly what "share of our total exposure" divides by.
+        # A date, expressed as the number of days from an origin the question
+        # states. The reduction picks WHICH date; the subtraction is arithmetic
+        # the question asked for outright.
+        if op == "epoch" and plan.get("origin"):
+            rows = self.select(plan["entity"], plan.get("filters"))
+            days = [_date(r.get(plan["field"])) for r in rows]
+            days = [d for d in days if d is not None]
+            if not days:
+                return None
+            pick = min(days) if plan.get("fn") == "min" else max(days)
+            origin = _date(plan["origin"])
+            return (pick - origin).days if origin else None
         if op == "ratio" and plan.get("denominator") is not None:
             num = self.run({**plan, "op": None})
             den = self.run({**plan, "op": None, "filters": plan["denominator"]})
